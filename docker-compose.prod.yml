@@ -1,0 +1,64 @@
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: infrastructure/nginx/Dockerfile
+    ports:
+      - "80:80"
+    depends_on: [frontend, api]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file: [.env]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: [.env]
+    depends_on: [postgres, redis, ai-engine]
+    restart: unless-stopped
+
+  scraper-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: [.env]
+    depends_on: [postgres, redis, ai-engine]
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: apps/scheduler/Dockerfile
+    env_file: [.env]
+    depends_on: [redis, api]
+    restart: unless-stopped
+
+  ai-engine:
+    build:
+      context: .
+      dockerfile: apps/ai-engine/Dockerfile
+    env_file: [.env]
+    depends_on: [postgres, redis]
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file: [.env]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
