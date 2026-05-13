@@ -1,0 +1,19 @@
+{
+  "name": "careerscout-ai",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev:web": "pnpm --filter @careerscout/web dev",
+    "build:web": "pnpm --filter @careerscout/web build",
+    "lint:web": "pnpm --filter @careerscout/web lint",
+    "format": "prettier --write .",
+    "prepare": "husky",
+    "lint-staged": "lint-staged"
+  },
+  "devDependencies": {
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3"
+  }
+}
