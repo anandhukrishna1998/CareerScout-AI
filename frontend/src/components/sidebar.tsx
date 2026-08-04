@@ -10,7 +10,7 @@ const nav = [
   ["Profile", "/profile-settings"],
   ["Analytics", "/analytics"],
   ["Admin", "/admin"],
-];
+] as const;
 
 export function Sidebar() {
   return (

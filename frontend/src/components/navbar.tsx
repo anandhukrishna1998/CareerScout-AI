@@ -8,7 +8,7 @@ const links = [
   { href: "/cvs", label: "CVs" },
   { href: "/ai-insights", label: "AI Insights" },
   { href: "/ai-chat", label: "AI Chat" },
-];
+] as const;
 
 export function Navbar() {
   return (

@@ -1,9 +1,10 @@
 import { MatchScoreCard } from "@/components/match-score-card";
 
-export default function JobDetailsPage({ params }: { params: { id: string } }) {
+export default async function JobDetailsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   return (
     <section className="space-y-5">
-      <h1 className="text-2xl font-semibold">Job Details #{params.id}</h1>
+      <h1 className="text-2xl font-semibold">Job Details #{id}</h1>
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="glass rounded-xl p-5 lg:col-span-2">
           <h2 className="text-lg font-semibold">Senior AI Engineer</h2>

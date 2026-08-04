@@ -4,6 +4,7 @@ import os
 
 import asyncpg
 from app.scrape_orchestrator import scrape_all_sources
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("worker")
@@ -11,6 +12,16 @@ logger = logging.getLogger("worker")
 
 def _to_asyncpg_dsn(url: str) -> str:
     return url.replace("postgresql+asyncpg://", "postgresql://")
+
+
+def parse_posted_at(date_str: str) -> datetime:
+    try:
+        if len(date_str) == 10:
+            return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except Exception:
+        logger.warning(f"Failed to parse date: {date_str}")
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 async def run_worker() -> None:
@@ -61,7 +72,7 @@ async def run_worker() -> None:
                 job.location,
                 job.description,
                 job.apply_url,
-                job.posted_at,
+                parse_posted_at(job.posted_at),
             )
     await conn.close()
 

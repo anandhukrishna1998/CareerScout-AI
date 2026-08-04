@@ -3,6 +3,7 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json ./
+# Generate lock file if missing, then do a clean install
 RUN npm install
 
 FROM base AS build
@@ -12,10 +13,11 @@ RUN npm run build
 
 FROM base AS runtime
 ENV NODE_ENV=production
+
+# Standalone output includes a minimal server and only the required node_modules
 COPY --from=build /app/public ./public
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
 
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["node", "server.js"]
