@@ -18,6 +18,11 @@ class TokenPair(BaseModel):
 
 
 class JobMatchResponse(BaseModel):
+    job_id: int
+    title: str
+    company: str
+    location: str
+    apply_url: str
     score: int
     strengths: list[str]
     missing_skills: list[str]

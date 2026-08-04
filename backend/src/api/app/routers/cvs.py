@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db_session
+from app.dependencies import get_current_user, get_db_session
 from app.models import CV, CVParsed, User
 from app.services.ai_client import parse_cv_text
 
@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/upload")
 async def upload_cv(
     file: UploadFile = File(...),
-    user_id: int = 1,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     allowed = {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"}
@@ -27,11 +27,7 @@ async def upload_cv(
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large")
 
-    user = await db.scalar(select(User).where(User.id == user_id))
-    if user is None:
-        user = User(id=user_id, email=f"user{user_id}@example.com", password_hash="placeholder", role="user")
-        db.add(user)
-        await db.flush()
+    user_id = current_user.id
 
     checksum = sha256(content).hexdigest()
     cv = CV(

@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db_session
-from app.models import CV, CVParsed, Job
+from app.dependencies import get_current_user, get_db_session
+from app.models import CV, CVParsed, Job, User
 from app.schemas import JobMatchResponse
 from app.services.ai_client import score_job
 
@@ -13,8 +13,11 @@ router = APIRouter()
 
 
 @router.get("/daily", response_model=list[JobMatchResponse])
-async def daily_matches(user_id: int = 1, db: AsyncSession = Depends(get_db_session)) -> list[JobMatchResponse]:
-    latest_cv = await db.scalar(select(CV).where(CV.user_id == user_id).order_by(desc(CV.id)))
+async def daily_matches(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session)
+) -> list[JobMatchResponse]:
+    latest_cv = await db.scalar(select(CV).where(CV.user_id == current_user.id).order_by(desc(CV.id)))
     if latest_cv is None:
         return []
 
@@ -39,6 +42,11 @@ async def daily_matches(user_id: int = 1, db: AsyncSession = Depends(get_db_sess
         )
         results.append(
             JobMatchResponse(
+                job_id=job.id,
+                title=job.title,
+                company=job.company,
+                location=job.location,
+                apply_url=job.apply_url,
                 score=int(scored.get("score", 0)),
                 strengths=list(scored.get("strengths", [])),
                 missing_skills=list(scored.get("missing_skills", [])),

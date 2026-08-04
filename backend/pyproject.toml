@@ -18,7 +18,8 @@ dependencies = [
   "playwright>=1.48.0",
   "python-jobspy",
   "scrapy",
-  "apscheduler>=3.10.4"
+  "apscheduler>=3.10.4",
+  "bcrypt>=4.2.0"
 ]
 
 [tool.black]
