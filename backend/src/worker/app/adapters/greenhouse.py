@@ -1,0 +1,51 @@
+import os
+from datetime import datetime, timedelta, timezone
+
+import httpx
+
+from app.adapters.base import JobProviderAdapter, NormalizedJob
+
+
+class GreenhouseAdapter(JobProviderAdapter):
+    async def search_recent_jobs(self) -> list[NormalizedJob]:
+        companies = [c.strip() for c in os.getenv("GREENHOUSE_COMPANIES", "").split(",") if c.strip()]
+        if not companies:
+            return []
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=int(os.getenv("SCRAPE_HOURS_OLD", "24")))
+        jobs: list[NormalizedJob] = []
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            for company in companies:
+                url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs"
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    payload = response.json()
+                except Exception:
+                    continue
+
+                for item in payload.get("jobs", []):
+                    updated = str(item.get("updated_at", ""))
+                    posted_at = datetime.now(tz=timezone.utc)
+                    if updated:
+                        try:
+                            posted_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+                    if posted_at < cutoff:
+                        continue
+
+                    jobs.append(
+                        NormalizedJob(
+                            source="greenhouse",
+                            external_id=str(item.get("id", "")),
+                            title=str(item.get("title", "Untitled Role")),
+                            company=company,
+                            location=str((item.get("location") or {}).get("name") or "Unknown"),
+                            posted_at=posted_at.isoformat(),
+                            description=str(item.get("absolute_url", "")),
+                            apply_url=str(item.get("absolute_url") or ""),
+                        )
+                    )
+        return jobs
