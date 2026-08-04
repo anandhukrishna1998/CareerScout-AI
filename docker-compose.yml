@@ -1,32 +1,36 @@
 services:
   frontend:
     build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
     env_file:
       - .env
     depends_on:
       - api
+    ports:
+      - "3000:3000"
     networks:
       - careerscout_net
 
   api:
     build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+      context: ./backend
+      dockerfile: src/api/Dockerfile
     env_file:
       - .env
     depends_on:
       - postgres
       - redis
       - ai-engine
+    ports:
+      - "8000:8000"
     networks:
       - careerscout_net
 
   scraper-worker:
     build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
+      context: ./backend
+      dockerfile: src/worker/Dockerfile
     env_file:
       - .env
     depends_on:
@@ -38,8 +42,8 @@ services:
 
   scheduler:
     build:
-      context: .
-      dockerfile: apps/scheduler/Dockerfile
+      context: ./backend
+      dockerfile: src/scheduler/Dockerfile
     env_file:
       - .env
     depends_on:
@@ -50,8 +54,8 @@ services:
 
   ai-engine:
     build:
-      context: .
-      dockerfile: apps/ai-engine/Dockerfile
+      context: ./backend
+      dockerfile: src/ai_engine/Dockerfile
     env_file:
       - .env
     depends_on:
