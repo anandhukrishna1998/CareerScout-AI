@@ -6,10 +6,10 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        bg: "#09090b",
-        panel: "#111113",
+        bg: "#000000",
+        panel: "#111111",
         muted: "#a1a1aa",
-        brand: "#7c3aed",
+        brand: "#00f0ff", // Neon Cyan
       },
     },
   },

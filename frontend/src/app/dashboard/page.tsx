@@ -31,19 +31,21 @@ export default function DashboardPage() {
   return (
     <div className="flex gap-6">
       <Sidebar />
-      <section className="w-full space-y-5">
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
+      <section className="w-full space-y-6">
+        <div className="border-b border-white/10 pb-4">
+          <h1 className="text-2xl font-bold tracking-tight text-white">Dashboard</h1>
+        </div>
         
         {loading ? (
-          <div className="flex h-32 items-center justify-center rounded-xl bg-panel">
-            <span className="text-zinc-400">Analyzing your CV against latest jobs...</span>
+          <div className="glass flex h-32 items-center justify-center">
+            <span className="font-medium text-zinc-400">Analyzing your CV against latest jobs...</span>
           </div>
         ) : error ? (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-5 text-red-400">
+          <div className="glass bg-red-500/10 border-red-500/50 p-5 text-red-400 font-medium">
             {error}
           </div>
         ) : matches.length === 0 ? (
-          <div className="rounded-xl bg-panel p-5 text-zinc-400">
+          <div className="glass p-5 text-zinc-400 font-medium">
             No matches found yet. Have you uploaded your CV?
           </div>
         ) : (
@@ -54,10 +56,10 @@ export default function DashboardPage() {
                 strengths={topMatch.strengths}
                 missing={topMatch.missing_skills}
               />
-              <div className="glass rounded-xl p-5 lg:col-span-2">
-                <p className="text-sm text-zinc-300">Daily highlights</p>
-                <p className="mt-2 text-zinc-400">
-                  {matches.length} new matches in the last 24h. Your top match is a {topMatch.score}% fit.
+              <div className="glass p-5 lg:col-span-2">
+                <p className="text-sm font-medium tracking-wide text-zinc-400 uppercase">Daily Highlights</p>
+                <p className="mt-2 text-base font-medium text-zinc-300">
+                  <strong className="text-white">{matches.length}</strong> new matches in the last 24h. Your top match is a <strong className="text-brand drop-shadow-[0_0_8px_rgba(0,240,255,0.4)]">{topMatch.score}%</strong> fit.
                 </p>
               </div>
             </div>

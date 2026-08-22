@@ -11,6 +11,7 @@ class NormalizedJob:
     posted_at: str
     description: str
     apply_url: str
+    contract_type: str = "Unknown"
 
 
 class JobProviderAdapter:

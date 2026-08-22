@@ -46,6 +46,7 @@ class Job(Base):
     description: Mapped[str] = mapped_column(Text)
     apply_url: Mapped[str] = mapped_column(String(1024), default="")
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    contract_type: Mapped[str] = mapped_column(String(64), default="Unknown")
 
 
 class JobMatch(Base):
@@ -57,3 +58,24 @@ class JobMatch(Base):
     strengths: Mapped[list[str]] = mapped_column(JSON)
     missing_skills: Mapped[list[str]] = mapped_column(JSON)
     explanation: Mapped[str] = mapped_column(Text)
+
+
+class SavedJob(Base):
+    __tablename__ = "saved_jobs"
+    __table_args__ = (UniqueConstraint("user_id", "job_id", name="uq_saved_jobs_user_job"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
+    country: Mapped[str] = mapped_column(String(128), default="")
+    city: Mapped[str] = mapped_column(String(128), default="")
+    technologies: Mapped[list[str]] = mapped_column(JSON, default=list)
+    salary_expectation: Mapped[int] = mapped_column(Integer, default=0)
+    remote_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    visa_sponsorship_needed: Mapped[bool] = mapped_column(Boolean, default=False)

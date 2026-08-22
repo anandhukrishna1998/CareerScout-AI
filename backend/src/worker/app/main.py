@@ -38,10 +38,15 @@ async def run_worker() -> None:
           location VARCHAR(255) NOT NULL,
           description TEXT NOT NULL,
           apply_url VARCHAR(1024) NOT NULL DEFAULT '',
-          posted_at TIMESTAMPTZ NOT NULL
+          posted_at TIMESTAMPTZ NOT NULL,
+          contract_type VARCHAR(64) NOT NULL DEFAULT 'Unknown'
         )
         """
     )
+    try:
+        await conn.execute("ALTER TABLE jobs ADD COLUMN contract_type VARCHAR(64) NOT NULL DEFAULT 'Unknown'")
+    except Exception:
+        pass  # Column already exists
     await conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_source_external_id
@@ -54,8 +59,8 @@ async def run_worker() -> None:
         for job in jobs:
             await conn.execute(
                 """
-                INSERT INTO jobs (source, external_id, title, company, location, description, apply_url, posted_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+                INSERT INTO jobs (source, external_id, title, company, location, description, apply_url, posted_at, contract_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9)
                 ON CONFLICT (source, external_id)
                 DO UPDATE SET
                   title = EXCLUDED.title,
@@ -63,7 +68,8 @@ async def run_worker() -> None:
                   location = EXCLUDED.location,
                   description = EXCLUDED.description,
                   apply_url = EXCLUDED.apply_url,
-                  posted_at = EXCLUDED.posted_at
+                  posted_at = EXCLUDED.posted_at,
+                  contract_type = EXCLUDED.contract_type
                 """,
                 job.source,
                 job.external_id,
@@ -73,6 +79,7 @@ async def run_worker() -> None:
                 job.description,
                 job.apply_url,
                 parse_posted_at(job.posted_at),
+                job.contract_type,
             )
     await conn.close()
 

@@ -25,7 +25,7 @@ export default function RegisterPage() {
       });
       const data = await response.json();
       setAccessToken(data.access_token);
-      router.push("/cvs");
+      router.push("/dashboard");
     } catch (err: any) {
       setError(err.message || "Registration failed");
     } finally {

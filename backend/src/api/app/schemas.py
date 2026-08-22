@@ -27,3 +27,34 @@ class JobMatchResponse(BaseModel):
     strengths: list[str]
     missing_skills: list[str]
     recommendation: str
+
+
+class SavedJobResponse(BaseModel):
+    id: int
+    job_id: int
+    title: str
+    company: str
+    location: str
+    apply_url: str
+    saved_at: str
+
+
+class PreferenceSchema(BaseModel):
+    locations: str = ""
+    salary_min: int = 0
+    salary_max: int = 0
+    remote_only: bool = False
+    visa_sponsorship: bool = False
+
+
+class ScrapeRequest(BaseModel):
+    keyword: str
+    location: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    reply: str

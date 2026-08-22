@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import Base, engine
 from app import models  # noqa: F401
-from app.routers import auth, cvs, health, jobs, matches
+from app.routers import auth, cvs, health, jobs, matches, saved_jobs, preferences, chat
 from app.settings import settings
 
 app = FastAPI(title="CareerScout API", version="0.1.0")
@@ -21,6 +21,9 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(cvs.router, prefix="/cvs", tags=["cvs"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(matches.router, prefix="/matches", tags=["matches"])
+app.include_router(saved_jobs.router, prefix="/saved-jobs", tags=["saved-jobs"])
+app.include_router(preferences.router, prefix="/preferences", tags=["preferences"])
+app.include_router(chat.router, prefix="/chat", tags=["chat"])
 
 
 @app.on_event("startup")

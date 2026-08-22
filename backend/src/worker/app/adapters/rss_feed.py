@@ -46,6 +46,17 @@ class RSSFeedAdapter(JobProviderAdapter):
                     if posted_at < cutoff:
                         continue
 
+                    contract_type = "Unknown"
+                    text_to_search = f"{title} {description}".lower()
+                    if "intern" in text_to_search or "stage" in text_to_search:
+                        contract_type = "Stage/Internship"
+                    elif "contract" in text_to_search or "cdd" in text_to_search:
+                        contract_type = "CDD"
+                    elif "alternance" in text_to_search or "apprentice" in text_to_search:
+                        contract_type = "Alternance"
+                    elif "fulltime" in text_to_search or "cdi" in text_to_search:
+                        contract_type = "CDI"
+
                     jobs.append(
                         NormalizedJob(
                             source=self.source,
@@ -56,6 +67,7 @@ class RSSFeedAdapter(JobProviderAdapter):
                             posted_at=posted_at.isoformat(),
                             description=description,
                             apply_url=link,
+                            contract_type=contract_type,
                         )
                     )
         return jobs

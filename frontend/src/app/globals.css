@@ -12,7 +12,13 @@ body {
 }
 
 .glass {
-  backdrop-filter: blur(8px);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+}
+
+.glass-glow:hover {
+  border-color: rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 20px 0px rgba(0, 240, 255, 0.1);
 }

@@ -62,6 +62,18 @@ async def scrape_with_jobspy(source: str, search_term: str, location: str, hours
 
     jobs: list[NormalizedJob] = []
     for _, row in results.iterrows():
+        raw_type = str(row.get("job_type") or "").lower()
+        if "intern" in raw_type or "stage" in raw_type:
+            contract_type = "Stage/Internship"
+        elif "contract" in raw_type or "cdd" in raw_type:
+            contract_type = "CDD"
+        elif "alternance" in raw_type or "apprentice" in raw_type:
+            contract_type = "Alternance"
+        elif "fulltime" in raw_type or "cdi" in raw_type:
+            contract_type = "CDI"
+        else:
+            contract_type = "Unknown"
+
         jobs.append(
             NormalizedJob(
                 source=source,
@@ -72,6 +84,7 @@ async def scrape_with_jobspy(source: str, search_term: str, location: str, hours
                 posted_at=str(row.get("date_posted") or row.get("date") or "1970-01-01T00:00:00+00:00"),
                 description=str(row.get("description") or ""),
                 apply_url=str(row.get("job_url") or ""),
+                contract_type=contract_type,
             )
         )
     return jobs
