@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { JobCard } from "@/components/job-card";
 import { useToast } from "@/components/providers";
@@ -104,6 +104,8 @@ function DashboardContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [savingJobIds, setSavingJobIds] = useState<Set<number>>(() => new Set());
+  const savingJobIdsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     setMounted(true);
@@ -163,6 +165,13 @@ function DashboardContent() {
   };
 
   const handleToggleSave = async (jobId: number, currentlySaved: boolean) => {
+    if (savingJobIdsRef.current.has(jobId)) return;
+    savingJobIdsRef.current.add(jobId);
+    setSavingJobIds((prev) => {
+      const next = new Set(prev);
+      next.add(jobId);
+      return next;
+    });
     try {
       if (currentlySaved) {
         await apiFetch(`/saved-jobs/${jobId}`, { method: "DELETE" });
@@ -177,8 +186,26 @@ function DashboardContent() {
       setMatches((prev) =>
         prev.map((m) => (m.job_id === jobId ? { ...m, is_saved: !currentlySaved } : m)),
       );
+      setAnalytics((prev) =>
+        prev
+          ? {
+              ...prev,
+              kpis: {
+                ...prev.kpis,
+                saved_count: Math.max(0, prev.kpis.saved_count + (currentlySaved ? -1 : 1)),
+              },
+            }
+          : prev,
+      );
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Could not update saved state", "error");
+    } finally {
+      savingJobIdsRef.current.delete(jobId);
+      setSavingJobIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
     }
   };
 
@@ -244,6 +271,7 @@ function DashboardContent() {
       ) : (
         <>
           <div
+            role="region"
             aria-label="Daily workspace telemetry"
             className="flex flex-wrap items-center gap-x-5 gap-y-2.5 border-y border-hairline py-3.5 text-sm"
           >
@@ -290,11 +318,11 @@ function DashboardContent() {
             </div>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
             <Surface
               variant="hero"
               radius="3xl"
-              className="flex flex-col justify-between gap-6 p-6 sm:p-7 lg:col-span-2"
+              className="flex min-w-0 flex-col justify-between gap-6 p-6 sm:p-7 lg:col-span-2"
             >
               {topMatch ? (
                 <>
@@ -312,10 +340,10 @@ function DashboardContent() {
                             </Badge>
                           )}
                         </div>
-                        <h2 className="mt-2.5 font-display text-2xl font-semibold leading-[1.2] tracking-[-0.02em] text-ink">
+                        <h2 className="mt-2.5 break-words font-display text-2xl font-semibold leading-[1.2] tracking-[-0.02em] text-ink">
                           {topMatch.title}
                         </h2>
-                        <p className="mt-1.5 text-sm text-ink-secondary">
+                        <p className="mt-1.5 break-words text-sm text-ink-secondary">
                           {topMatch.company}
                           {topMatch.location ? ` · ${topMatch.location}` : ""}
                           {topMatch.salary_text ? (
@@ -357,7 +385,7 @@ function DashboardContent() {
                     </div>
 
                     {topMatch.recommendation && (
-                      <p className="max-w-[65ch] text-sm leading-[1.55] text-ink-secondary">
+                      <p className="max-w-[65ch] break-words text-sm leading-[1.55] text-ink-secondary">
                         {topMatch.recommendation}
                       </p>
                     )}
@@ -390,9 +418,10 @@ function DashboardContent() {
 
                     <button
                       type="button"
+                      disabled={savingJobIds.has(topMatch.job_id)}
                       aria-pressed={topMatch.is_saved}
                       onClick={() => handleToggleSave(topMatch.job_id, topMatch.is_saved)}
-                      className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface sm:min-h-[40px] ${
+                      className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition duration-150 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface sm:min-h-[40px] ${
                         topMatch.is_saved
                           ? "border-[rgb(var(--accent)/0.3)] bg-accent-soft text-accent-soft-ink hover:bg-hover"
                           : "border-hairline bg-subtle text-ink hover:bg-hover"
@@ -442,7 +471,7 @@ function DashboardContent() {
             <Surface
               variant="elevated"
               radius="3xl"
-              className="flex flex-col justify-between gap-5 p-6 sm:p-7 lg:col-span-1"
+              className="flex min-w-0 flex-col justify-between gap-5 p-6 sm:p-7 lg:col-span-1"
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
@@ -560,84 +589,76 @@ function DashboardContent() {
             </Surface>
           </div>
 
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-display text-xl font-semibold tracking-[-0.015em] text-ink">
-                  Curated Match Stream
-                </h2>
-                <p className="mt-0.5 text-xs text-muted">
-                  Daily recommendations ordered after today&apos;s strongest match.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  href="/ai-insights"
-                  className="inline-flex min-h-[44px] items-center rounded-full px-3 py-1.5 text-xs font-medium text-ink-secondary transition hover:bg-subtle hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-[36px]"
-                >
-                  Skill Gap Insights
-                </Link>
-                <Link
-                  href="/jobs?sort=score"
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-2 py-1.5 text-xs font-medium text-accent-text transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-[36px]"
-                >
-                  <span>View all in Role Explorer</span>
-                  <ArrowRightIcon />
-                </Link>
-              </div>
-            </div>
-
-            {matches.length === 0 ? (
-              <SectionState
-                status="empty"
-                title="No daily matches ranked yet"
-                description="Upload your primary CV or update your technologies in Profile Settings to generate tailored matches."
-                action={
-                  <Link href="/cvs" className="btn-primary min-h-[44px] sm:min-h-[40px]">
-                    Upload CV
-                  </Link>
-                }
-              />
-            ) : remainingMatches.length === 0 ? (
-              <Surface
-                variant="subtle"
-                radius="2xl"
-                className="flex flex-wrap items-center justify-between gap-3 p-5"
-              >
-                <p className="text-sm text-ink-secondary">
-                  Your highest-scoring match is featured above. Explore the full index for more open
-                  roles.
-                </p>
-                <Link href="/jobs" className="btn-secondary min-h-[44px] sm:min-h-[38px]">
-                  Browse Role Explorer
-                </Link>
-              </Surface>
-            ) : (
-              <MotionReveal delay={0.04}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  {remainingMatches.map((m) => (
-                    <JobCard
-                      key={m.job_id}
-                      id={m.job_id}
-                      title={m.title}
-                      company={m.company}
-                      location={m.location}
-                      score={m.score}
-                      remote={m.remote_mode}
-                      source={m.source}
-                      salaryText={m.salary_text}
-                      postedAt={m.posted_at}
-                      applyUrl={m.apply_url}
-                      skills={m.matched_skills}
-                      isSaved={m.is_saved}
-                      onToggleSave={handleToggleSave}
-                    />
-                  ))}
+          {matches.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-xl font-semibold tracking-[-0.015em] text-ink">
+                    Curated Match Stream
+                  </h2>
+                  <p className="mt-0.5 text-xs text-muted">
+                    Daily recommendations ordered after today&apos;s strongest match.
+                  </p>
                 </div>
-              </MotionReveal>
-            )}
-          </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    href="/ai-insights"
+                    className="inline-flex min-h-[44px] items-center rounded-full px-3 py-1.5 text-xs font-medium text-ink-secondary transition hover:bg-subtle hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-[36px]"
+                  >
+                    Skill Gap Insights
+                  </Link>
+                  <Link
+                    href="/jobs?sort=score"
+                    className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-2 py-1.5 text-xs font-medium text-accent-text transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-[36px]"
+                  >
+                    <span>View all in Role Explorer</span>
+                    <ArrowRightIcon />
+                  </Link>
+                </div>
+              </div>
+
+              {remainingMatches.length === 0 ? (
+                <Surface
+                  variant="subtle"
+                  radius="2xl"
+                  className="flex flex-wrap items-center justify-between gap-3 p-5"
+                >
+                  <p className="text-sm text-ink-secondary">
+                    Your highest-scoring match is featured above. Explore the full index for more
+                    open roles.
+                  </p>
+                  <Link href="/jobs" className="btn-secondary min-h-[44px] sm:min-h-[38px]">
+                    Browse Role Explorer
+                  </Link>
+                </Surface>
+              ) : (
+                <MotionReveal delay={0.04}>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    {remainingMatches.map((m) => (
+                      <div key={m.job_id} className="min-w-0">
+                        <JobCard
+                          id={m.job_id}
+                          title={m.title}
+                          company={m.company}
+                          location={m.location}
+                          score={m.score}
+                          remote={m.remote_mode}
+                          source={m.source}
+                          salaryText={m.salary_text}
+                          postedAt={m.posted_at}
+                          applyUrl={m.apply_url}
+                          skills={m.matched_skills}
+                          isSaved={m.is_saved}
+                          onToggleSave={handleToggleSave}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </MotionReveal>
+              )}
+            </div>
+          )}
         </>
       )}
     </section>

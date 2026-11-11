@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MatchScoreCard } from "@/components/match-score-card";
 import { useToast } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
@@ -71,13 +71,36 @@ export default function JobDetailsPage() {
   const [coverLetter, setCoverLetter] = useState("");
   const [tone, setTone] = useState<"concise" | "enthusiastic" | "executive">("concise");
   const [generatingCL, setGeneratingCL] = useState(false);
+  const requestIdRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const coverLetterEpochRef = useRef(0);
+
+  useEffect(() => {
+    coverLetterEpochRef.current += 1;
+    setCoverLetter("");
+    setGeneratingCL(false);
+  }, [jobId]);
 
   const loadJob = useCallback(async () => {
-    if (!jobId) return;
+    const requestId = ++requestIdRef.current;
+    abortControllerRef.current?.abort();
+    if (!jobId || !jobId.trim()) {
+      abortControllerRef.current = null;
+      setJob(null);
+      setError("Missing role identifier.");
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setLoading(true);
     setError("");
     try {
-      const res = await apiFetch<JobDetail>(`/jobs/${jobId}`);
+      const res = await apiFetch<JobDetail>(`/jobs/${jobId}`, {
+        signal: controller.signal,
+      });
+      if (requestId !== requestIdRef.current) return;
       setJob(res);
       if (res.saved) {
         setStatusVal(res.saved.status);
@@ -87,16 +110,27 @@ export default function JobDetailsPage() {
         setNotes("");
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      if (err instanceof Error && err.name === "AbortError") return;
       setJob(null);
       setError(err instanceof Error ? err.message : "Could not load job details");
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [jobId]);
 
   useEffect(() => {
-    loadJob();
+    void loadJob();
   }, [loadJob, accessToken]);
+
+  useEffect(() => {
+    return () => {
+      requestIdRef.current += 1;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleSaveTracker = async () => {
     if (!job) return;
@@ -106,13 +140,25 @@ export default function JobDetailsPage() {
     }
     setSavingTracker(true);
     try {
-      await apiFetch("/saved-jobs", {
+      const savedRes = await apiFetch<{
+        status?: SavedStatus;
+        notes?: string;
+        applied_at?: string | null;
+      }>("/saved-jobs", {
         method: "POST",
         body: JSON.stringify({ job_id: job.id, status: statusVal, notes }),
       });
       setJob((prev) =>
         prev
-          ? { ...prev, is_saved: true, saved: { status: statusVal, notes, applied_at: null } }
+          ? {
+              ...prev,
+              is_saved: true,
+              saved: {
+                status: savedRes?.status ?? statusVal,
+                notes: savedRes?.notes ?? notes,
+                applied_at: savedRes?.applied_at ?? prev.saved?.applied_at ?? null,
+              },
+            }
           : null,
       );
       pushToast("Application tracker updated", "success");
@@ -129,18 +175,23 @@ export default function JobDetailsPage() {
       pushToast("Sign in to generate tailored cover letters", "info");
       return;
     }
+    const epoch = coverLetterEpochRef.current;
     setGeneratingCL(true);
     try {
       const res = await apiFetch<{ cover_letter: string }>("/ai/cover-letter", {
         method: "POST",
         body: JSON.stringify({ job_id: job.id, tone }),
       });
+      if (coverLetterEpochRef.current !== epoch) return;
       setCoverLetter(res.cover_letter);
       pushToast("Tailored cover letter ready!", "success");
     } catch (err) {
+      if (coverLetterEpochRef.current !== epoch) return;
       pushToast(err instanceof Error ? err.message : "Failed to generate cover letter", "error");
     } finally {
-      setGeneratingCL(false);
+      if (coverLetterEpochRef.current === epoch) {
+        setGeneratingCL(false);
+      }
     }
   };
 
@@ -184,12 +235,12 @@ export default function JobDetailsPage() {
           }
         />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
           <div className="min-w-0 space-y-6 lg:col-span-2">
             <Surface variant="elevated" radius="3xl" className="p-6 sm:p-8">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
-                  <h1 className="font-display text-[1.75rem] font-semibold leading-[1.2] tracking-[-0.02em] text-ink">
+                  <h1 className="break-words font-display text-[1.75rem] font-semibold leading-[1.2] tracking-[-0.02em] text-ink">
                     {job.title}
                   </h1>
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-secondary">
@@ -390,6 +441,11 @@ export default function JobDetailsPage() {
               <p className="mt-1 text-xs text-muted">
                 Save pipeline status and interview notes for this role.
               </p>
+              {job.saved?.applied_at && (
+                <p className="mt-2 font-mono text-xs tabular-nums text-muted">
+                  Applied {job.saved.applied_at.slice(0, 10)}
+                </p>
+              )}
 
               <div className="mt-4 space-y-4">
                 <div>

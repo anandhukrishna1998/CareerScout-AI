@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { FilterPanel, type JobFiltersState } from "@/components/filter-panel";
 import { JobCard } from "@/components/job-card";
 import { useToast } from "@/components/providers";
@@ -22,6 +22,24 @@ const DEFAULT_FILTERS: JobFiltersState = {
   min_score: 0,
   sort: "newest",
 };
+
+function buildJobsQueryString(filters: JobFiltersState, targetPage: number): string {
+  const params = new URLSearchParams();
+  if (filters.q.trim()) params.set("q", filters.q.trim());
+  if (filters.country.trim()) params.set("country", filters.country.trim());
+  if (filters.city.trim()) params.set("city", filters.city.trim());
+  if (filters.technologies.trim()) params.set("technologies", filters.technologies.trim());
+  if (filters.remote_mode !== "all") params.set("remote_mode", filters.remote_mode);
+  if (filters.source !== "all") params.set("source", filters.source);
+  if (filters.posting_age_hours > 0) {
+    params.set("posting_age_hours", String(filters.posting_age_hours));
+  }
+  if (filters.min_score > 0) params.set("min_score", String(filters.min_score));
+  params.set("sort", filters.sort);
+  params.set("page", String(targetPage));
+  params.set("page_size", "12");
+  return params.toString();
+}
 
 function JobExplorerContent() {
   const { pushToast } = useToast();
@@ -50,44 +68,63 @@ function JobExplorerContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [ingesting, setIngesting] = useState(false);
+  const requestIdRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const skipNextEffectKeyRef = useRef<string | null>(null);
 
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const params = new URLSearchParams();
-      if (filters.q.trim()) params.set("q", filters.q.trim());
-      if (filters.country.trim()) params.set("country", filters.country.trim());
-      if (filters.city.trim()) params.set("city", filters.city.trim());
-      if (filters.technologies.trim()) params.set("technologies", filters.technologies.trim());
-      if (filters.remote_mode !== "all") params.set("remote_mode", filters.remote_mode);
-      if (filters.source !== "all") params.set("source", filters.source);
-      if (filters.posting_age_hours > 0) {
-        params.set("posting_age_hours", String(filters.posting_age_hours));
+  const loadJobs = useCallback(
+    async (pageOverride?: number) => {
+      const targetPage = typeof pageOverride === "number" ? pageOverride : page;
+      const requestId = ++requestIdRef.current;
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      setLoading(true);
+      setError("");
+      try {
+        const query = buildJobsQueryString(filters, targetPage);
+        const res = await apiFetch<JobListResponse>(`/jobs?${query}`, {
+          signal: controller.signal,
+        });
+        if (requestId !== requestIdRef.current) return;
+        setData(res);
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return;
+        if (err instanceof Error && err.name === "AbortError") return;
+        const message = err instanceof Error ? err.message : "Failed to load jobs";
+        setError(message);
+        setData(null);
+        pushToast(message, "error");
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setLoading(false);
+        }
       }
-      if (filters.min_score > 0) params.set("min_score", String(filters.min_score));
-      params.set("sort", filters.sort);
-      params.set("page", String(page));
-      params.set("page_size", "12");
-
-      const res = await apiFetch<JobListResponse>(`/jobs?${params.toString()}`);
-      setData(res);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load jobs";
-      setError(message);
-      setData(null);
-      pushToast(message, "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [filters, page, pushToast]);
+    },
+    [filters, page, pushToast],
+  );
 
   useEffect(() => {
+    const currentKey = `${buildJobsQueryString(filters, page)}|${accessToken ?? ""}`;
+    if (skipNextEffectKeyRef.current === currentKey) {
+      skipNextEffectKeyRef.current = null;
+      return;
+    }
+    skipNextEffectKeyRef.current = null;
+
     const timer = setTimeout(() => {
-      loadJobs();
+      void loadJobs();
     }, 220);
     return () => clearTimeout(timer);
-  }, [loadJobs]);
+  }, [filters, page, accessToken, loadJobs]);
+
+  useEffect(() => {
+    return () => {
+      requestIdRef.current += 1;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleResetFilters = () => {
     setFilters(DEFAULT_FILTERS);
@@ -120,8 +157,11 @@ function JobExplorerContent() {
         }),
       });
       pushToast(`Fetched ${res.total_ingested} live jobs across public & ATS boards!`, "success");
-      setPage(1);
-      await loadJobs();
+      if (page !== 1) {
+        skipNextEffectKeyRef.current = `${buildJobsQueryString(filters, 1)}|${accessToken ?? ""}`;
+        setPage(1);
+      }
+      await loadJobs(1);
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Live job search failed", "error");
     } finally {
@@ -163,7 +203,7 @@ function JobExplorerContent() {
   return (
     <section
       aria-labelledby="jobs-heading"
-      className="grid w-full min-w-0 gap-6 lg:grid-cols-[290px_1fr]"
+      className="grid w-full min-w-0 grid-cols-1 gap-6 lg:grid-cols-[290px_1fr]"
     >
       <FilterPanel
         filters={filters}
@@ -226,7 +266,9 @@ function JobExplorerContent() {
             status="error"
             title="Could not load roles"
             description={error}
-            onRetry={loadJobs}
+            onRetry={() => {
+              void loadJobs();
+            }}
           />
         ) : !data || data.items.length === 0 ? (
           <SectionState

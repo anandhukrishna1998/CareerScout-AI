@@ -212,6 +212,7 @@ function createInteractiveHarness(relPath, createMocks) {
 }
 
 function createBaseMocks(overrides = {}) {
+  const pushToast = () => {};
   return {
     "next/link": {
       __esModule: true,
@@ -243,7 +244,7 @@ function createBaseMocks(overrides = {}) {
       }),
     },
     "@/components/providers": {
-      useToast: () => ({ pushToast: () => {} }),
+      useToast: () => ({ pushToast }),
     },
     ...overrides,
   };
@@ -979,4 +980,747 @@ test("Saved Jobs (/saved-jobs) renders capsule aria-pressed tabs, safe URLs, bou
   assert.match(harness.textOf(tree), /No jobs in this pipeline stage/);
 
   harness.unmount();
+});
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+test("Dashboard (/dashboard) handles empty matches without duplicate onboarding copy, Hero Save toggle with KPI update & lock, region role, and min-w-0 guards", async () => {
+  let matchList = [];
+  let savedCount = 4;
+  const saveDeferred = createDeferred();
+  const apiCalls = [];
+
+  const harness = createInteractiveHarness("app/dashboard/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "framer-motion": {
+        ...webRequire("framer-motion"),
+        useReducedMotion: () => true,
+      },
+      "@/lib/api": {
+        apiFetch: async (pathName, opts) => {
+          apiCalls.push({ pathName, opts });
+          if (pathName === "/matches/daily?limit=8") {
+            return matchList;
+          }
+          if (pathName === "/analytics/overview") {
+            return makeAnalytics({ saved_count: savedCount });
+          }
+          if (pathName === "/cvs") {
+            return { items: [makeCv()] };
+          }
+          if (pathName === "/saved-jobs" && opts?.method === "POST") {
+            return saveDeferred.promise;
+          }
+          if (pathName.startsWith("/saved-jobs/") && opts?.method === "DELETE") {
+            return { status: "removed" };
+          }
+          return {};
+        },
+      },
+    }),
+  );
+
+  harness.render();
+  await harness.flushEffects();
+  let tree = harness.render();
+
+  // 1) matches.length === 0 renders single Hero onboarding prompt without duplicate Curated Match Stream empty callout
+  const emptyText = harness.textOf(tree);
+  assert.match(emptyText, /Ready to rank your daily job feed/);
+  assert.doesNotMatch(
+    emptyText,
+    /No daily matches ranked yet/,
+    "Empty dashboard must not repeat redundant onboarding copy in Curated Match Stream",
+  );
+  const onboardingLinks = harness.findAll(
+    tree,
+    (el) => el.type === "a" && el.props?.href === "/onboarding",
+  );
+  assert.equal(onboardingLinks.length, 1);
+
+  // Telemetry strip uses landmark role="region" with aria-label
+  const telemetryRegion = harness.findAll(
+    tree,
+    (el) => el.props?.["aria-label"] === "Daily workspace telemetry",
+  )[0];
+  assert.ok(telemetryRegion);
+  assert.equal(telemetryRegion.props.role, "region");
+
+  // Reload with matches so Hero Save Role toggle + min-w-0 overflow guards render
+  matchList = [makeMatch(101, 92), makeMatch(102, 84)];
+  const fetchLiveBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Fetch Live Jobs"),
+  )[0];
+  await fetchLiveBtn.props.onClick();
+  tree = harness.render();
+
+  // Both Hero bento surfaces include min-w-0, and hero title/company include break-words
+  const heroSurface = harness.findAll(
+    tree,
+    (el) =>
+      typeof el.props?.className === "string" &&
+      el.props.className.includes("lg:col-span-2"),
+  )[0];
+  const resumeSurface = harness.findAll(
+    tree,
+    (el) =>
+      typeof el.props?.className === "string" &&
+      el.props.className.includes("lg:col-span-1"),
+  )[0];
+  assert.ok(heroSurface && resumeSurface);
+  assert.match(heroSurface.props.className, /\bmin-w-0\b/);
+  assert.match(resumeSurface.props.className, /\bmin-w-0\b/);
+
+  const heroTitleHeading = harness.findAll(
+    tree,
+    (el) => el.type === "h2" && harness.textOf(el).includes("Senior AI Engineer 101"),
+  )[0];
+  assert.ok(heroTitleHeading);
+  assert.match(heroTitleHeading.props.className, /\bbreak-words\b/);
+
+  // Hero Save Role toggle locks while in flight, prevents concurrent duplicate calls, and updates KPI saved_count
+  assert.match(harness.textOf(tree), /4\s*\/\s*2/);
+  let heroSaveBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).trim() === "Save Role",
+  )[0];
+  assert.ok(heroSaveBtn);
+  assert.equal(heroSaveBtn.props["aria-pressed"], false);
+
+  const firstClick = heroSaveBtn.props.onClick();
+  tree = harness.render();
+  heroSaveBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).trim() === "Save Role",
+  )[0];
+  assert.equal(heroSaveBtn.props.disabled, true, "Hero Save Role button must disable while saving");
+  // Rapid duplicate click while in flight must not send a second POST
+  await heroSaveBtn.props.onClick();
+  assert.equal(
+    apiCalls.filter((c) => c.pathName === "/saved-jobs" && c.opts?.method === "POST").length,
+    1,
+  );
+
+  saveDeferred.resolve({ id: 1, job_id: 101, status: "saved" });
+  await firstClick;
+  tree = harness.render();
+
+  const heroSavedBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).trim() === "Saved",
+  )[0];
+  assert.ok(heroSavedBtn);
+  assert.equal(heroSavedBtn.props["aria-pressed"], true);
+  assert.match(harness.textOf(tree), /5\s*\/\s*2/);
+
+  // Clicking Saved triggers DELETE /saved-jobs/101 and decrements KPI saved_count back to 4
+  await heroSavedBtn.props.onClick();
+  tree = harness.render();
+  assert.ok(apiCalls.some((c) => c.pathName === "/saved-jobs/101" && c.opts?.method === "DELETE"));
+  assert.match(harness.textOf(tree), /4\s*\/\s*2/);
+
+  harness.unmount();
+});
+
+test("Job Explorer (/jobs) avoids stale page=2 double-fetch on live ingest, cancels stale responses, and handles unauth + accessToken changes + save toggle", async () => {
+  let currentToken = null;
+  const toasts = [];
+  const pushToast = (msg, kind) => toasts.push({ msg, kind });
+  const apiCalls = [];
+  let jobGetUrls = [];
+  let pageData = {
+    items: [
+      {
+        id: 11,
+        title: "Staff RAG Architect",
+        company: "Botanical AI",
+        location: "Paris, France",
+        country: "France",
+        city: "Paris",
+        remote_mode: "remote",
+        contract_type: "CDI",
+        experience_level: "senior",
+        salary_text: "95k EUR",
+        skills: ["Python", "RAG"],
+        source: "greenhouse",
+        apply_url: "https://example.com/11",
+        posted_at: "2026-11-11T09:00:00Z",
+        score: null,
+        is_saved: false,
+      },
+    ],
+    total: 25,
+    page: 1,
+    page_size: 12,
+    total_pages: 3,
+    available_sources: ["greenhouse"],
+    available_countries: ["France"],
+  };
+  let customJobsResponder = null;
+
+  const harness = createInteractiveHarness("app/jobs/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "next/navigation": {
+        useRouter: () => ({ push: () => {} }),
+        usePathname: () => "/jobs",
+        useSearchParams: () => new URLSearchParams(),
+      },
+      "@/store/auth-store": {
+        useAuthStore: () => ({
+          user: currentToken
+            ? {
+                id: 1,
+                email: "ada@example.com",
+                full_name: "Ada Lovelace",
+                role: "user",
+                onboarding_completed: true,
+              }
+            : null,
+          accessToken: currentToken,
+          hydrated: true,
+          setSession: () => {},
+          updateUser: () => {},
+        }),
+      },
+      "@/components/providers": {
+        useToast: () => ({ pushToast }),
+      },
+      "@/lib/api": {
+        apiFetch: async (pathName, opts) => {
+          apiCalls.push({ pathName, opts });
+          if (pathName.startsWith("/jobs?")) {
+            jobGetUrls.push(pathName);
+            if (customJobsResponder) {
+              return customJobsResponder(pathName, opts);
+            }
+            return pageData;
+          }
+          if (pathName === "/jobs/ingest") {
+            return { total_ingested: 6 };
+          }
+          if (pathName === "/saved-jobs") {
+            return { id: 1, job_id: 11, status: "saved" };
+          }
+          if (pathName.startsWith("/saved-jobs/")) {
+            return { status: "removed" };
+          }
+          return {};
+        },
+      },
+    }),
+  );
+
+  // 1) Unauthenticated browsing (accessToken === null) loads jobs cleanly and blocks Save/Ingest with info toasts
+  harness.render();
+  await harness.flushEffects(260);
+  let tree = harness.render();
+  assert.equal(jobGetUrls.length, 1);
+  assert.match(harness.textOf(tree), /Staff RAG Architect/);
+  assert.match(harness.textOf(tree), /No CV/);
+
+  const unauthSaveBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && el.props?.["aria-label"] === "Save Staff RAG Architect",
+  )[0];
+  await unauthSaveBtn.props.onClick();
+  assert.equal(apiCalls.some((c) => c.pathName === "/saved-jobs"), false);
+  assert.ok(toasts.some((t) => t.msg.includes("Sign in to save jobs")));
+
+  const unauthIngestBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Fetch Fresh Live Jobs"),
+  )[0];
+  await unauthIngestBtn.props.onClick();
+  assert.equal(apiCalls.some((c) => c.pathName === "/jobs/ingest"), false);
+
+  // 2) accessToken change triggers re-fetch with personalized ATS score
+  jobGetUrls = [];
+  currentToken = "tok-demo";
+  pageData = {
+    ...pageData,
+    items: [{ ...pageData.items[0], score: 93, is_saved: false }],
+  };
+  harness.render();
+  await harness.flushEffects(260);
+  tree = harness.render();
+  assert.equal(jobGetUrls.length, 1, "Changing accessToken must re-fetch /jobs");
+  assert.match(harness.textOf(tree), /93/);
+  assert.doesNotMatch(harness.textOf(tree), /No CV/);
+
+  // 3) JobCard onToggleSave works for Save -> Saved -> Save
+  const authSaveBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && el.props?.["aria-label"] === "Save Staff RAG Architect",
+  )[0];
+  await authSaveBtn.props.onClick();
+  tree = harness.render();
+  assert.ok(apiCalls.some((c) => c.pathName === "/saved-jobs" && c.opts?.method === "POST"));
+
+  const authUnsaveBtn = harness.findAll(
+    tree,
+    (el) =>
+      el.type === "button" &&
+      el.props?.["aria-label"] === "Remove Staff RAG Architect from saved jobs",
+  )[0];
+  assert.ok(authUnsaveBtn);
+  assert.equal(authUnsaveBtn.props["aria-pressed"], true);
+  await authUnsaveBtn.props.onClick();
+  tree = harness.render();
+  assert.ok(apiCalls.some((c) => c.pathName === "/saved-jobs/11" && c.opts?.method === "DELETE"));
+
+  // 4) Navigate to page=2, then click Fetch Fresh Live Jobs -> single page=1 fetch (no stale page=2 fetch)
+  pageData = { ...pageData, page: 2 };
+  const nextBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el) === "Next",
+  )[0];
+  nextBtn.props.onClick();
+  harness.render();
+  await harness.flushEffects(260);
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Page 2 of 3/);
+
+  jobGetUrls = [];
+  pageData = { ...pageData, page: 1 };
+  const liveIngestBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Fetch Fresh Live Jobs"),
+  )[0];
+  await liveIngestBtn.props.onClick();
+  harness.render();
+  await harness.flushEffects(260);
+  tree = harness.render();
+
+  assert.equal(
+    jobGetUrls.length,
+    1,
+    `Expected exactly 1 /jobs fetch after handleLiveIngest from page=2, got ${JSON.stringify(jobGetUrls)}`,
+  );
+  assert.match(jobGetUrls[0], /[?&]page=1(&|$)/);
+  assert.doesNotMatch(jobGetUrls[0], /[?&]page=2(&|$)/);
+
+  // 5) Stale-response cancellation: slow earlier query must not overwrite newer query results
+  const slowDeferred = createDeferred();
+  let slowSignal = null;
+  const searchInput = harness.findAll(
+    tree,
+    (el) => el.type === "input" && el.props?.type === "search",
+  )[0];
+  customJobsResponder = (url, opts) => {
+    if (url.includes("q=slow")) {
+      slowSignal = opts?.signal ?? null;
+      return slowDeferred.promise;
+    }
+    return Promise.resolve({
+      ...pageData,
+      items: [{ ...pageData.items[0], id: 99, title: "Fast Rust Match" }],
+    });
+  };
+  searchInput.props.onChange({ target: { value: "slow" } });
+  harness.render();
+  await harness.flushEffects(260);
+
+  tree = harness.render();
+  const fastSearchInput = harness.findAll(
+    tree,
+    (el) => el.type === "input" && el.props?.type === "search",
+  )[0];
+  fastSearchInput.props.onChange({ target: { value: "fast" } });
+  harness.render();
+  await harness.flushEffects(260);
+  tree = harness.render();
+
+  assert.match(harness.textOf(tree), /Fast Rust Match/);
+  assert.ok(slowSignal && slowSignal.aborted, "Newer /jobs request must abort previous signal");
+
+  // Resolve slow earlier query late -> must be ignored
+  slowDeferred.resolve({
+    ...pageData,
+    items: [{ ...pageData.items[0], id: 77, title: "Stale Python Match" }],
+  });
+  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Fast Rust Match/);
+  assert.doesNotMatch(harness.textOf(tree), /Stale Python Match/);
+
+  harness.unmount();
+});
+
+test("Job Details (/jobs/[id]) resets coverLetter on jobId change, cancels stale responses, handles falsy jobId, preserves applied_at, and wraps H1", async () => {
+  let currentParams = { id: "1" };
+  const slowJob1 = createDeferred();
+  let useSlowJob1 = false;
+
+  const jobsById = {
+    "1": {
+      id: 1,
+      title: "VeryLongUnbreakablePrincipalAIEngineerRoleTitleForMobileWrap",
+      company: "Fjord Tech",
+      location: "Oslo, Norway",
+      country: "Norway",
+      city: "Oslo",
+      remote_mode: "hybrid",
+      contract_type: "Full-time",
+      experience_level: "senior",
+      salary_text: "110k EUR",
+      skills: ["Python"],
+      source: "ashby",
+      apply_url: "https://jobs.fjord.no/1",
+      posted_at: "2026-11-11T08:00:00Z",
+      score: 89,
+      description: "Job 1 description",
+      is_saved: true,
+      saved: {
+        status: "applied",
+        notes: "Initial note",
+        applied_at: "2026-11-05T14:30:00Z",
+      },
+      match: null,
+    },
+    "2": {
+      id: 2,
+      title: "Botanical Backend Lead",
+      company: "Spruce Lab",
+      location: "Stockholm, Sweden",
+      country: "Sweden",
+      city: "Stockholm",
+      remote_mode: "remote",
+      contract_type: "Full-time",
+      experience_level: "lead",
+      salary_text: "120k EUR",
+      skills: ["Go"],
+      source: "greenhouse",
+      apply_url: "https://jobs.spruce.se/2",
+      posted_at: "2026-11-11T09:00:00Z",
+      score: 91,
+      description: "Job 2 description",
+      is_saved: false,
+      saved: null,
+      match: null,
+    },
+  };
+
+  const harness = createInteractiveHarness("app/jobs/[id]/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "next/navigation": {
+        useRouter: () => ({ push: () => {} }),
+        usePathname: () => `/jobs/${currentParams.id ?? ""}`,
+        useParams: () => currentParams,
+      },
+      "@/lib/api": {
+        apiFetch: async (pathName) => {
+          if (pathName === "/jobs/1") {
+            if (useSlowJob1) return slowJob1.promise;
+            return jobsById["1"];
+          }
+          if (pathName === "/jobs/2") {
+            return jobsById["2"];
+          }
+          if (pathName === "/ai/cover-letter") {
+            return { cover_letter: "Cover letter specifically for Job 1" };
+          }
+          if (pathName === "/saved-jobs") {
+            // Simulate partial payload omitting applied_at
+            return { id: 9, job_id: 1, status: "interviewing", notes: "Phone screen booked" };
+          }
+          return {};
+        },
+      },
+    }),
+  );
+
+  harness.render();
+  await harness.flushEffects();
+  let tree = harness.render();
+
+  // H1 has break-words for unspaced role titles
+  const h1 = harness.findAll(tree, (el) => el.type === "h1")[0];
+  assert.ok(h1);
+  assert.match(h1.props.className, /\bbreak-words\b/);
+
+  // applied_at is shown and preserved when handleSaveTracker succeeds without returning applied_at
+  assert.match(harness.textOf(tree), /2026-11-05/);
+  const trackerSelect = harness.findAll(
+    tree,
+    (el) => el.type === "select" && el.props?.id === "tracker-status",
+  )[0];
+  trackerSelect.props.onChange({ target: { value: "interviewing" } });
+  tree = harness.render();
+  const updateBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Update Tracker"),
+  )[0];
+  await updateBtn.props.onClick();
+  tree = harness.render();
+  assert.match(
+    harness.textOf(tree),
+    /2026-11-05/,
+    "handleSaveTracker must preserve existing applied_at instead of overwriting with null",
+  );
+
+  // Generate cover letter on job 1
+  const pitchBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Generate Pitch"),
+  )[0];
+  await pitchBtn.props.onClick();
+  tree = harness.render();
+  assert.ok(
+    harness.findAll(tree, (el) => el.type === "textarea" && el.props?.id === "pitch-draft")[0],
+  );
+
+  // Navigate jobId "1" -> "2": coverLetter must reset to ""
+  currentParams = { id: "2" };
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Botanical Backend Lead/);
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "textarea" && el.props?.id === "pitch-draft").length,
+    0,
+    "Navigating between jobs must clear previous job coverLetter draft",
+  );
+
+  // Stale-response cancellation across rapid jobId changes (slow "1" then fast "2")
+  useSlowJob1 = true;
+  currentParams = { id: "1" };
+  harness.render();
+  await harness.flushEffects();
+
+  currentParams = { id: "2" };
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Botanical Backend Lead/);
+
+  slowJob1.resolve(jobsById["1"]);
+  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Botanical Backend Lead/);
+  assert.doesNotMatch(
+    harness.textOf(tree),
+    /VeryLongUnbreakablePrincipalAIEngineerRoleTitleForMobileWrap/,
+  );
+
+  // Falsy jobId exits loading state with explicit error alert
+  currentParams = { id: "" };
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  assert.equal(harness.findAll(tree, (el) => el.props?.role === "status").length, 0);
+  assert.equal(harness.findAll(tree, (el) => el.props?.role === "alert").length, 1);
+
+  harness.unmount();
+});
+
+test("Saved Jobs (/saved-jobs) supports status select PATCH, independent concurrent card locks, placeholder counts while loading/error, min-w-0 title, and empty state", async () => {
+  const patchDeferred = createDeferred();
+  const deleteDeferred = createDeferred();
+  let listMode = "error";
+  const apiCalls = [];
+
+  const itemsFixture = [
+    {
+      id: 1,
+      job_id: 501,
+      status: "saved",
+      notes: "Initial bookmark",
+      applied_at: null,
+      created_at: "2026-11-10T10:00:00Z",
+      updated_at: "2026-11-10T10:00:00Z",
+      job: {
+        id: 501,
+        title: "ML Platform Engineer",
+        company: "Spruce Systems",
+        location: "Berlin, Germany",
+        country: "Germany",
+        city: "Berlin",
+        remote_mode: "hybrid",
+        source: "lever",
+        apply_url: "https://jobs.spruce.de/501",
+        salary_text: "90k EUR",
+        posted_at: "2026-11-10T10:00:00Z",
+        score: 86,
+      },
+    },
+    {
+      id: 2,
+      job_id: 502,
+      status: "applied",
+      notes: "",
+      applied_at: "2026-11-11T09:00:00Z",
+      created_at: "2026-11-10T10:00:00Z",
+      updated_at: "2026-11-11T09:00:00Z",
+      job: {
+        id: 502,
+        title: "Applied AI Researcher",
+        company: "Oat Labs",
+        location: "Remote",
+        country: "Worldwide",
+        city: "",
+        remote_mode: "remote",
+        source: "remoteok",
+        apply_url: "https://oat.example/502",
+        salary_text: "",
+        posted_at: "2026-11-11T09:00:00Z",
+        score: null,
+      },
+    },
+  ];
+
+  const harness = createInteractiveHarness("app/saved-jobs/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "@/lib/api": {
+        apiFetch: async (pathName, opts) => {
+          apiCalls.push({ pathName, opts });
+          if (pathName === "/saved-jobs") {
+            if (listMode === "error") throw new Error("Load failed");
+            if (listMode === "empty") return { items: [] };
+            return { items: itemsFixture };
+          }
+          if (pathName === "/saved-jobs/501" && opts?.method === "PATCH") {
+            return patchDeferred.promise;
+          }
+          if (pathName === "/saved-jobs/502" && opts?.method === "DELETE") {
+            return deleteDeferred.promise;
+          }
+          return { status: "ok" };
+        },
+      },
+    }),
+  );
+
+  // Loading state renders (—) on stage tabs rather than (0)
+  let tree = harness.render();
+  const loadingAllTab = harness.findAll(
+    tree,
+    (el) => el.type === "button" && el.props?.["aria-pressed"] !== undefined,
+  )[0];
+  assert.match(harness.textOf(loadingAllTab), /All\s*\(—\)/);
+
+  // Error state also renders (—) on stage tabs
+  await harness.flushEffects();
+  tree = harness.render();
+  const errorAllTab = harness.findAll(
+    tree,
+    (el) => el.type === "button" && el.props?.["aria-pressed"] !== undefined,
+  )[0];
+  assert.match(harness.textOf(errorAllTab), /All\s*\(—\)/);
+
+  // Load items and verify min-w-0 on title span
+  listMode = "items";
+  const retryBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Retry"),
+  )[0];
+  await retryBtn.props.onClick();
+  tree = harness.render();
+
+  const titleSpan = harness.findAll(
+    tree,
+    (el) =>
+      el.type === "span" &&
+      typeof el.props?.className === "string" &&
+      harness.textOf(el) === "ML Platform Engineer",
+  )[0];
+  assert.ok(titleSpan);
+  assert.match(titleSpan.props.className, /\bmin-w-0\b/);
+  assert.match(titleSpan.props.className, /\bbreak-words\b/);
+
+  // Concurrent mutations: start PATCH /saved-jobs/501 and DELETE /saved-jobs/502 simultaneously
+  const select501 = harness.findAll(
+    tree,
+    (el) => el.type === "select" && el.props?.id === "saved-status-501",
+  )[0];
+  const patchPromise = select501.props.onChange({ target: { value: "interviewing" } });
+  tree = harness.render();
+
+  const select501Busy = harness.findAll(
+    tree,
+    (el) => el.type === "select" && el.props?.id === "saved-status-501",
+  )[0];
+  const select502Free = harness.findAll(
+    tree,
+    (el) => el.type === "select" && el.props?.id === "saved-status-502",
+  )[0];
+  assert.equal(select501Busy.props.disabled, true);
+  assert.equal(select502Free.props.disabled, false);
+
+  const removeBtns = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el) === "Remove",
+  );
+  const deletePromise = removeBtns[1].props.onClick();
+  tree = harness.render();
+
+  // Both cards locked while both mutations are in flight
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "select" && el.props?.id === "saved-status-501")[0]
+      .props.disabled,
+    true,
+  );
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "select" && el.props?.id === "saved-status-502")[0]
+      .props.disabled,
+    true,
+  );
+
+  // Resolve 502 first: 501 MUST stay locked while its PATCH is still in flight
+  deleteDeferred.resolve({ status: "removed" });
+  await deletePromise;
+  tree = harness.render();
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "select" && el.props?.id === "saved-status-501")[0]
+      .props.disabled,
+    true,
+    "Completing card 502 mutation must not unlock card 501 while 501 request is still pending",
+  );
+
+  // Now resolve 501 PATCH -> 501 unlocks and status updates to interviewing
+  patchDeferred.resolve({ status: "interviewing" });
+  await patchPromise;
+  tree = harness.render();
+  const select501Done = harness.findAll(
+    tree,
+    (el) => el.type === "select" && el.props?.id === "saved-status-501",
+  )[0];
+  assert.equal(select501Done.props.disabled, false);
+  assert.equal(select501Done.props.value, "interviewing");
+  const patchStatusCall = apiCalls.find(
+    (c) => c.pathName === "/saved-jobs/501" && c.opts?.method === "PATCH",
+  );
+  assert.ok(patchStatusCall);
+  assert.deepEqual(JSON.parse(patchStatusCall.opts.body), { status: "interviewing" });
+
+  // Empty items.length === 0 state via fresh harness
+  const emptyHarness = createInteractiveHarness("app/saved-jobs/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "@/lib/api": {
+        apiFetch: async () => ({ items: [] }),
+      },
+    }),
+  );
+  emptyHarness.render();
+  await emptyHarness.flushEffects();
+  const emptyTree = emptyHarness.render();
+  assert.match(emptyHarness.textOf(emptyTree), /No saved jobs yet/);
+
+  harness.unmount();
+  emptyHarness.unmount();
 });

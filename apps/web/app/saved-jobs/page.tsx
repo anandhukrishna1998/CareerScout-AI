@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { useToast } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +53,25 @@ function SavedJobsContent() {
   const [error, setError] = useState("");
   const [editingNotesId, setEditingNotesId] = useState<number | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
-  const [busyJobId, setBusyJobId] = useState<number | null>(null);
+  const [busyJobIds, setBusyJobIds] = useState<Set<number>>(() => new Set());
+  const busyJobIdsRef = useRef<Set<number>>(new Set());
+
+  const setJobBusy = (jobId: number, busy: boolean) => {
+    if (busy) {
+      busyJobIdsRef.current.add(jobId);
+    } else {
+      busyJobIdsRef.current.delete(jobId);
+    }
+    setBusyJobIds((prev) => {
+      const next = new Set(prev);
+      if (busy) {
+        next.add(jobId);
+      } else {
+        next.delete(jobId);
+      }
+      return next;
+    });
+  };
 
   const loadSaved = useCallback(async () => {
     setLoading(true);
@@ -75,7 +93,8 @@ function SavedJobsContent() {
   }, [loadSaved]);
 
   const handleStatusChange = async (jobId: number, status: SavedStatus) => {
-    setBusyJobId(jobId);
+    if (busyJobIdsRef.current.has(jobId)) return;
+    setJobBusy(jobId, true);
     try {
       await apiFetch(`/saved-jobs/${jobId}`, {
         method: "PATCH",
@@ -86,12 +105,13 @@ function SavedJobsContent() {
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Status update failed", "error");
     } finally {
-      setBusyJobId(null);
+      setJobBusy(jobId, false);
     }
   };
 
   const handleSaveNotes = async (jobId: number) => {
-    setBusyJobId(jobId);
+    if (busyJobIdsRef.current.has(jobId)) return;
+    setJobBusy(jobId, true);
     try {
       await apiFetch(`/saved-jobs/${jobId}`, {
         method: "PATCH",
@@ -100,35 +120,34 @@ function SavedJobsContent() {
       setItems((prev) =>
         prev.map((it) => (it.job_id === jobId ? { ...it, notes: notesDraft } : it)),
       );
-      setEditingNotesId(null);
+      setEditingNotesId((prev) => (prev === jobId ? null : prev));
       pushToast("Notes saved", "success");
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Could not save notes", "error");
     } finally {
-      setBusyJobId(null);
+      setJobBusy(jobId, false);
     }
   };
 
   const handleRemove = async (jobId: number) => {
-    setBusyJobId(jobId);
+    if (busyJobIdsRef.current.has(jobId)) return;
+    setJobBusy(jobId, true);
     try {
       await apiFetch(`/saved-jobs/${jobId}`, { method: "DELETE" });
       setItems((prev) => prev.filter((it) => it.job_id !== jobId));
-      if (editingNotesId === jobId) {
-        setEditingNotesId(null);
-      }
+      setEditingNotesId((prev) => (prev === jobId ? null : prev));
       pushToast("Removed from saved jobs", "info");
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Remove failed", "error");
     } finally {
-      setBusyJobId(null);
+      setJobBusy(jobId, false);
     }
   };
 
   const filtered = filterStatus === "all" ? items : items.filter((i) => i.status === filterStatus);
 
   return (
-    <section aria-labelledby="saved-jobs-heading" className="w-full space-y-6">
+    <section aria-labelledby="saved-jobs-heading" className="w-full min-w-0 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1
@@ -169,7 +188,7 @@ function SavedJobsContent() {
               }`}
             >
               <span>{tab.label}</span>
-              <span className="font-mono tabular-nums">({count})</span>
+              <span className="font-mono tabular-nums">({loading || error ? "—" : count})</span>
             </button>
           );
         })}
@@ -208,7 +227,7 @@ function SavedJobsContent() {
         <div className="space-y-4">
           {filtered.map((item) => {
             const safeApplyUrl = getSafeExternalUrl(item.job.apply_url);
-            const isBusy = busyJobId === item.job_id;
+            const isBusy = busyJobIds.has(item.job_id);
             const statusSelectId = `saved-status-${item.job_id}`;
             const notesInputId = `saved-notes-${item.job_id}`;
 
@@ -222,7 +241,7 @@ function SavedJobsContent() {
                           href={`/jobs/${item.job_id}`}
                           className="inline-flex min-h-[44px] max-w-full items-center rounded-md font-display text-lg font-semibold tracking-[-0.015em] text-ink transition-colors duration-150 hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-h-0"
                         >
-                          <span className="break-words">{item.job.title}</span>
+                          <span className="min-w-0 break-words">{item.job.title}</span>
                         </Link>
                       </h2>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-ink-secondary">
