@@ -34,6 +34,12 @@ function formatRelativeDate(iso?: string): string {
   return `${days}d ago`;
 }
 
+function getSafeExternalUrl(url?: string): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+}
+
 function CheckIcon() {
   return (
     <svg
@@ -108,6 +114,7 @@ export function JobCard({
   const hasScore = score !== null && score !== undefined && Number.isFinite(score);
   const roundedScore = hasScore ? Math.round(clampScore(score)) : null;
   const visibleSkills = skills.slice(0, 5);
+  const safeApplyUrl = getSafeExternalUrl(applyUrl);
 
   return (
     <article className="h-full">
@@ -119,14 +126,16 @@ export function JobCard({
         <div className="min-w-0">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <Link
-                href={detailsHref}
-                className="block truncate rounded-md text-base font-semibold text-ink transition-colors duration-150 hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-              >
-                {title}
-              </Link>
+              <h3 className="min-w-0">
+                <Link
+                  href={detailsHref}
+                  className="inline-flex min-h-[44px] max-w-full items-center rounded-md text-base font-semibold text-ink transition-colors duration-150 hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface sm:min-h-0"
+                >
+                  <span className="truncate">{title}</span>
+                </Link>
+              </h3>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-ink-secondary">
-                <span className="truncate">{company}</span>
+                <span className="max-w-full truncate">{company}</span>
                 {relativeDate && (
                   <>
                     <span aria-hidden="true" className="text-muted">
@@ -169,9 +178,9 @@ export function JobCard({
 
           {visibleSkills.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5">
-              {visibleSkills.map((sk) => (
+              {visibleSkills.map((sk, idx) => (
                 <span
-                  key={sk}
+                  key={`${sk}-${idx}`}
                   className="rounded-full border border-hairline bg-subtle px-2.5 py-0.5 text-xs font-medium text-ink-secondary"
                 >
                   {sk}
@@ -207,9 +216,9 @@ export function JobCard({
                 <span>{isSaved ? "Saved" : "Save"}</span>
               </button>
             )}
-            {applyUrl && (
+            {safeApplyUrl && (
               <a
-                href={applyUrl}
+                href={safeApplyUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`Apply to ${title} at ${company} (opens in new tab)`}

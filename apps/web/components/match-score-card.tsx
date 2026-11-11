@@ -124,8 +124,8 @@ export function MatchScoreCard({
           <h3 className="mb-2.5 text-xs font-medium text-muted">Matched strengths</h3>
           {strengths.length > 0 ? (
             <ul className="space-y-2 text-sm text-ink-secondary">
-              {strengths.map((s) => (
-                <li key={s} className="flex items-start gap-2.5">
+              {strengths.map((s, idx) => (
+                <li key={`${s}-${idx}`} className="flex items-start gap-2.5">
                   <span
                     aria-hidden="true"
                     className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-soft-ink"
@@ -147,8 +147,8 @@ export function MatchScoreCard({
           <h3 className="mb-2.5 text-xs font-medium text-muted">Missing skills</h3>
           {missing.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
-              {missing.map((m) => (
-                <Badge key={m} tone="warning">
+              {missing.map((m, idx) => (
+                <Badge key={`${m}-${idx}`} tone="warning">
                   {m}
                 </Badge>
               ))}
@@ -165,8 +165,8 @@ export function MatchScoreCard({
           <div className="mt-5 border-t border-hairline pt-4">
             <h3 className="mb-2.5 text-xs font-medium text-muted">Action plan</h3>
             <ul className="space-y-2 text-xs leading-[1.55] text-ink-secondary">
-              {actionItems.map((a) => (
-                <li key={a} className="flex items-start gap-2">
+              {actionItems.map((a, idx) => (
+                <li key={`${a}-${idx}`} className="flex items-start gap-2">
                   <ArrowRightIcon />
                   <span>{a}</span>
                 </li>

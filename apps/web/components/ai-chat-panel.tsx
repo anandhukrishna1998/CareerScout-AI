@@ -49,6 +49,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(initialJobId ?? null);
+  const [fallbackJob, setFallbackJob] = useState<JobItem | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -58,6 +59,9 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
   const loadSeqRef = useRef(0);
+  const clearSeqRef = useRef(0);
+  const selectedJobIdRef = useRef<number | null>(selectedJobId);
+  selectedJobIdRef.current = selectedJobId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,6 +78,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
 
   const loadContext = useCallback(async () => {
     const seq = ++loadSeqRef.current;
+    const clearSeq = clearSeqRef.current;
     setLoadingHistory(true);
     setLoadError(null);
     try {
@@ -82,8 +87,30 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
         apiFetch<JobListResponse>("/jobs?page_size=20&sort=score"),
       ]);
       if (!mountedRef.current || seq !== loadSeqRef.current) return;
-      setMessages(histRes.items ?? []);
-      setJobs(jobsRes.items ?? []);
+      const loadedJobs = jobsRes.items ?? [];
+      if (clearSeq === clearSeqRef.current) {
+        setMessages(histRes.items ?? []);
+      }
+      setJobs(loadedJobs);
+
+      const targetJobId = selectedJobIdRef.current;
+      if (targetJobId !== null && !loadedJobs.some((j) => j.id === targetJobId)) {
+        apiFetch<JobItem>(`/jobs/${targetJobId}`)
+          .then((job) => {
+            if (!mountedRef.current || seq !== loadSeqRef.current) return;
+            if (
+              job &&
+              typeof job.id === "number" &&
+              typeof job.title === "string" &&
+              typeof job.company === "string"
+            ) {
+              setFallbackJob(job);
+            }
+          })
+          .catch(() => {
+            // fallback option label remains intact
+          });
+      }
     } catch (err) {
       if (!mountedRef.current || seq !== loadSeqRef.current) return;
       setLoadError(
@@ -108,11 +135,12 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
 
   const sendMessage = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || loading) return;
+    if (!text || loading || loadError) return;
 
+    const sendClearSeq = clearSeqRef.current;
     setSendError(null);
     const optimisticUser: ChatMessage = {
-      id: Date.now(),
+      id: -Date.now() - Math.floor(Math.random() * 1000),
       role: "user",
       content: text,
       job_id: selectedJobId,
@@ -127,33 +155,47 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
         method: "POST",
         body: JSON.stringify({ message: text, job_id: selectedJobId }),
       });
+      if (!mountedRef.current || sendClearSeq !== clearSeqRef.current) return;
       setMessages((prev) => [...prev, res.message]);
     } catch (err) {
+      if (!mountedRef.current || sendClearSeq !== clearSeqRef.current) return;
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
+      if (!textOverride) setInput(text);
       const msg = err instanceof Error ? err.message : "Failed to send message";
       setSendError(msg);
       pushToast(msg, "error");
     } finally {
-      setLoading(false);
+      if (mountedRef.current && sendClearSeq === clearSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const handleClear = async () => {
-    if (clearing) return;
+    if (clearing || loading) return;
     setClearing(true);
     try {
       await apiFetch("/ai/chat/history", { method: "DELETE" });
+      if (!mountedRef.current) return;
+      clearSeqRef.current += 1;
       setMessages([]);
       setSendError(null);
       pushToast("Conversation cleared", "info");
     } catch (err) {
+      if (!mountedRef.current) return;
       pushToast(err instanceof Error ? err.message : "Failed to clear chat", "error");
     } finally {
-      setClearing(false);
+      if (mountedRef.current) {
+        setClearing(false);
+      }
     }
   };
 
   const contextSelectId = `${uid}-job-context`;
   const chatInputId = `${uid}-chat-input`;
+  const hasSelectedInJobs = selectedJobId !== null && jobs.some((j) => j.id === selectedJobId);
+  const matchedFallback =
+    selectedJobId !== null && fallbackJob && fallbackJob.id === selectedJobId ? fallbackJob : null;
 
   return (
     <section aria-label="AI Career Assistant">
@@ -179,6 +221,13 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
               className="input-field min-h-[44px] max-w-[260px] py-1.5 text-xs sm:min-h-[38px]"
             >
               <option value="">General Career Context</option>
+              {selectedJobId !== null && !hasSelectedInJobs && (
+                <option value={selectedJobId}>
+                  {matchedFallback
+                    ? `${matchedFallback.title} @ ${matchedFallback.company}${matchedFallback.score !== null ? ` (${matchedFallback.score}%)` : ""}`
+                    : `Selected role #${selectedJobId}`}
+                </option>
+              )}
               {jobs.map((j) => (
                 <option key={j.id} value={j.id}>
                   {j.title} @ {j.company} {j.score !== null ? `(${j.score}%)` : ""}
@@ -191,7 +240,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
                 variant="secondary"
                 size="sm"
                 loading={clearing}
-                disabled={clearing}
+                disabled={clearing || loading}
                 onClick={handleClear}
               >
                 Clear
@@ -202,7 +251,6 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
 
         <div
           ref={scrollRef}
-          aria-live="polite"
           className="mb-4 h-96 space-y-3 overflow-y-auto rounded-2xl border border-hairline bg-canvas p-4 text-sm"
         >
           {loadingHistory ? (
@@ -232,34 +280,37 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
               </div>
             </div>
           ) : loadError ? (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex min-h-full py-2">
               <SectionState
                 status="error"
                 title="Could not load conversation context"
                 description={loadError}
                 onRetry={loadContext}
-                className="w-full max-w-lg"
+                className="m-auto w-full max-w-lg"
               />
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center px-2 text-center">
-              <p className="max-w-[46ch] text-sm font-medium text-ink">
-                Ask for CV improvements, missing skill strategy, or interview prep.
-              </p>
-              <p className="mt-1 max-w-[48ch] text-xs text-muted">
-                Choose a job context above or start with a tailored prompt below.
-              </p>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {SUGGESTED_PROMPTS.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => sendMessage(p)}
-                    className="min-h-[44px] rounded-full border border-hairline bg-surface px-3.5 py-2 text-xs font-medium text-ink-secondary transition-colors duration-150 hover:border-accent/40 hover:bg-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:min-h-[36px]"
-                  >
-                    {p}
-                  </button>
-                ))}
+            <div className="flex min-h-full flex-col items-center px-2 py-4 text-center">
+              <div className="my-auto flex flex-col items-center">
+                <p className="max-w-[46ch] text-sm font-medium text-ink">
+                  Ask for CV improvements, missing skill strategy, or interview prep.
+                </p>
+                <p className="mt-1 max-w-[48ch] text-xs text-muted">
+                  Choose a job context above or start with a tailored prompt below.
+                </p>
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {SUGGESTED_PROMPTS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      disabled={loading}
+                      onClick={() => sendMessage(p)}
+                      className="min-h-[44px] rounded-full border border-hairline bg-surface px-3.5 py-2 text-xs font-medium text-ink-secondary transition-colors duration-150 hover:border-accent/40 hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:min-h-[36px]"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : (
@@ -315,47 +366,51 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
           )}
         </div>
 
-        {sendError && (
-          <div
-            role="alert"
-            className="mb-3 rounded-xl border border-status-danger-border bg-status-danger-bg px-3.5 py-2.5 text-xs text-status-danger-fg"
-          >
-            {sendError}
-          </div>
-        )}
+        {!loadError && (
+          <>
+            {sendError && (
+              <div
+                role="alert"
+                className="mb-3 rounded-xl border border-status-danger-border bg-status-danger-bg px-3.5 py-2.5 text-xs text-status-danger-fg"
+              >
+                {sendError}
+              </div>
+            )}
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            sendMessage();
-          }}
-          className="flex flex-col gap-2 sm:flex-row sm:items-center"
-        >
-          <label htmlFor={chatInputId} className="sr-only">
-            Message AI Career Assistant
-          </label>
-          <input
-            id={chatInputId}
-            type="text"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              if (sendError) setSendError(null);
-            }}
-            className="input-field min-h-[44px]"
-            placeholder="How can I improve my ATS score for ML Engineer roles?"
-          />
-          <Button
-            type="submit"
-            variant="primary"
-            size="md"
-            disabled={loading || !input.trim()}
-            className="min-h-[44px] shrink-0"
-          >
-            <span>Send</span>
-            <SendIcon />
-          </Button>
-        </form>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendMessage();
+              }}
+              className="flex flex-col gap-2 sm:flex-row sm:items-center"
+            >
+              <label htmlFor={chatInputId} className="sr-only">
+                Message AI Career Assistant
+              </label>
+              <input
+                id={chatInputId}
+                type="text"
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (sendError) setSendError(null);
+                }}
+                className="input-field min-h-[44px]"
+                placeholder="How can I improve my ATS score for ML Engineer roles?"
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                disabled={loading || !input.trim()}
+                className="min-h-[44px] shrink-0"
+              >
+                <span>Send</span>
+                <SendIcon />
+              </Button>
+            </form>
+          </>
+        )}
       </Surface>
     </section>
   );
