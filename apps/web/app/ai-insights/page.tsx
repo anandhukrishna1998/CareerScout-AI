@@ -181,9 +181,7 @@ function AIInsightsContent() {
 
               <div className="flex flex-col items-center py-2">
                 <ScoreRing score={readinessScore} label="Average alignment" size="lg" />
-                <p className="mt-2 text-center text-xs text-muted">
-                  Average alignment across recent indexed roles
-                </p>
+                <p className="mt-2 text-center text-xs text-muted">Across recent indexed roles</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3 border-t border-hairline pt-4">

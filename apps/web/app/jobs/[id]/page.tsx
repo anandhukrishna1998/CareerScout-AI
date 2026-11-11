@@ -238,8 +238,8 @@ export default function JobDetailsPage() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
           <div className="min-w-0 space-y-6 lg:col-span-2">
             <Surface variant="elevated" radius="3xl" className="p-6 sm:p-8">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 sm:flex-1">
                   <h1 className="break-words font-display text-[1.75rem] font-semibold leading-[1.2] tracking-[-0.02em] text-ink">
                     {job.title}
                   </h1>
@@ -274,7 +274,7 @@ export default function JobDetailsPage() {
                     href={safeApplyUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="btn-primary min-h-[44px] shrink-0 sm:min-h-[40px]"
+                    className="btn-primary min-h-[44px] self-start shrink-0 sm:min-h-[40px]"
                   >
                     <span>Apply on {job.source}</span>
                     <ExternalArrowIcon />

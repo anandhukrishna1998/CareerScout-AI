@@ -506,8 +506,8 @@ function CVManagerContent() {
                     cv.is_primary ? "border-[rgb(var(--accent)/0.35)]" : ""
                   }`}
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                    <div className="min-w-0 sm:flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="min-w-0 break-words font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                           {cv.filename}

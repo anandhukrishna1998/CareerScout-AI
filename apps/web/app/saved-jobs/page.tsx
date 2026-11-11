@@ -234,8 +234,8 @@ function SavedJobsContent() {
             return (
               <article key={item.id}>
                 <Surface variant="elevated" radius="2xl" className="p-5 sm:p-6">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 sm:flex-1">
                       <h2 className="min-w-0">
                         <Link
                           href={`/jobs/${item.job_id}`}

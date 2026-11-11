@@ -212,7 +212,7 @@ export function FilterPanel({
               value={filters.country}
               onChange={(e) => update("country", e.target.value)}
               className="input-field min-h-[44px] sm:min-h-[42px]"
-              placeholder="France, Germany, USA, Worldwide..."
+              placeholder="France, Germany, Remote..."
             />
             <datalist id={countryDatalistId}>
               {countrySuggestions.map((c) => (

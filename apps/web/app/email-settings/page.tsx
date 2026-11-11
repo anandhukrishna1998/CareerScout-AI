@@ -383,12 +383,13 @@ function EmailSettingsContent() {
                 </h2>
                 <Badge tone="neutral">Light Digest</Badge>
               </div>
-              <div className="max-h-[420px] overflow-auto rounded-2xl border border-hairline bg-subtle p-3">
+              <div className="max-h-[480px] overflow-auto rounded-2xl border border-hairline bg-subtle p-2">
                 <iframe
                   title="Email digest preview"
                   srcDoc={previewHtml}
                   sandbox=""
-                  className="h-[390px] w-full rounded-xl bg-transparent"
+                  style={{ colorScheme: "light" }}
+                  className="h-[445px] w-full rounded-xl bg-transparent lg:h-[364px]"
                 />
               </div>
             </Surface>
