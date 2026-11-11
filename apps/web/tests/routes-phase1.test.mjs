@@ -300,20 +300,45 @@ test("Landing page (/) renders asymmetric 60/40 hero without LCP MotionReveal, S
   assert.match(html, /Missing: Kubernetes/);
   assert.match(html, /--status-warning-bg/);
 
-  // Signed-in CTA switch
-  const { default: AuthedLanding } = loadPageModule(
-    "app/page.tsx",
-    createBaseMocks({
-      "@/store/auth-store": {
-        useAuthStore: () => ({
-          user: { id: 1, email: "ada@example.com", full_name: "Ada", role: "user", onboarding_completed: true },
-          setSession: () => {},
-        }),
-      },
-    }),
-  );
-  const authedHtml = renderToStaticMarkup(React.createElement(AuthedLanding));
-  assert.match(authedHtml, /href="\/dashboard"[^>]*>Open Dashboard</);
+  // Hydration-safe signed-in CTA: SSR & pre-mount render "Get Started Free", post-mount transitions to "Open Dashboard"
+  const authedMocks = createBaseMocks({
+    "@/store/auth-store": {
+      useAuthStore: () => ({
+        user: { id: 1, email: "ada@example.com", full_name: "Ada", role: "user", onboarding_completed: true },
+        setSession: () => {},
+      }),
+    },
+  });
+  const { default: AuthedLanding } = loadPageModule("app/page.tsx", authedMocks);
+  const authedSsrHtml = renderToStaticMarkup(React.createElement(AuthedLanding));
+  assert.match(authedSsrHtml, /href="\/auth\/register"[^>]*>Get Started Free</);
+  assert.doesNotMatch(authedSsrHtml, /Open Dashboard/);
+
+  const authedHarness = createInteractiveHarness("app/page.tsx", (reactMock) => ({
+    ...authedMocks,
+    react: reactMock,
+    "framer-motion": {
+      ...webRequire("framer-motion"),
+      useReducedMotion: () => true,
+    },
+  }));
+  const preMountTree = authedHarness.render();
+  const preMountLink = authedHarness.findAll(
+    preMountTree,
+    (el) => el.type === "a" && authedHarness.textOf(el).includes("Get Started Free"),
+  )[0];
+  assert.ok(preMountLink, "Pre-mount render must match SSR CTA to prevent hydration mismatch");
+  assert.equal(preMountLink.props.href, "/auth/register");
+
+  await authedHarness.flushEffects();
+  const postMountTree = authedHarness.render();
+  const postMountLink = authedHarness.findAll(
+    postMountTree,
+    (el) => el.type === "a" && authedHarness.textOf(el).includes("Open Dashboard"),
+  )[0];
+  assert.ok(postMountLink, "Post-mount render for signed-in user must show Open Dashboard");
+  assert.equal(postMountLink.props.href, "/dashboard");
+  authedHarness.unmount();
 
   // Interactive demo launch preserves POST /auth/demo + setSession + /dashboard redirect
   const apiCalls = [];
@@ -550,8 +575,9 @@ test("Onboarding (/onboarding) renders min-h-[44px] step controls, accessible CV
     assert.ok(html.includes(`id="${id}"`), `Expected matching control id="${id}" on onboarding step 1`);
   }
 
-  // Interactive multi-step flow + profile error + CV upload zone + handleFinish
+  // Interactive multi-step flow + profile error + CV upload/paste isolation + handleFinish
   let failProfile = true;
+  let failFileUpload = true;
   const apiCalls = [];
   const updatedUsers = [];
   const routes = [];
@@ -588,6 +614,28 @@ test("Onboarding (/onboarding) renders min-h-[44px] step controls, accessible CV
               salary_expectation: "85k EUR",
               remote_preference: "hybrid",
               visa_required: false,
+            };
+          }
+          if (pathName === "/cvs/upload") {
+            if (failFileUpload) {
+              throw new Error("Corrupted PDF file");
+            }
+            return {
+              id: 10,
+              filename: "very-long-unbreakable-resume-filename-without-spaces-2026.pdf",
+              mime_type: "application/pdf",
+              file_size: 420,
+              is_primary: true,
+              encrypted: true,
+              created_at: "2026-11-11T12:00:00Z",
+              parsed: {
+                summary: "AI Engineer",
+                skills: ["Docker"],
+                languages: ["Spanish"],
+                years_experience: 6,
+                experience_level: "senior",
+                suggested_roles: ["AI Engineer"],
+              },
             };
           }
           if (pathName === "/cvs/from-text") {
@@ -653,6 +701,7 @@ test("Onboarding (/onboarding) renders min-h-[44px] step controls, accessible CV
   )[0];
   assert.ok(fileInput);
   assert.match(fileInput.props.className, /\bsr-only\b/);
+  assert.equal(fileInput.props.disabled, false);
   const dropZone = harness.findAll(
     tree,
     (el) => typeof el.props?.className === "string" && el.props.className.includes("focus-within:ring-2"),
@@ -664,10 +713,74 @@ test("Onboarding (/onboarding) renders min-h-[44px] step controls, accessible CV
   )[0];
   assert.ok(uploadTrigger);
 
-  // Paste CV text and click Finish & Open Dashboard -> auto-parses via /cvs/from-text + completes onboarding
-  const textarea = harness.findAll(tree, (el) => el.type === "textarea")[0];
-  textarea.props.onChange({ target: { value: "Senior ML Engineer with FastAPI and RAG." } });
+  // 1. Failed file upload clears cvFile, resets input.value, and shows role=alert
+  const mockFile = new File(["pdf bytes"], "very-long-unbreakable-resume-filename-without-spaces-2026.pdf", {
+    type: "application/pdf",
+  });
+  const fileTarget = { files: [mockFile], value: "C:\\fakepath\\resume.pdf" };
+  await fileInput.props.onChange({ target: fileTarget });
+  assert.equal(fileTarget.value, "", "File input value must reset so selecting the same file again fires onChange");
   tree = harness.render();
+  assert.doesNotMatch(harness.textOf(tree), /Selected:/, "Failed upload must clear stale cvFile");
+  assert.match(harness.textOf(harness.findAll(tree, (el) => el.props?.role === "alert")[0]), /Corrupted PDF file/);
+
+  // 2. Successful file upload displays break-all filename and merges parsed languages
+  failFileUpload = false;
+  await fileInput.props.onChange({ target: { files: [mockFile], value: "C:\\fakepath\\resume.pdf" } });
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /Selected:\s*very-long-unbreakable-resume-filename-without-spaces-2026\.pdf/);
+  const breakAllSelected = harness.findAll(
+    tree,
+    (el) => el.type === "p" && typeof el.props?.className === "string" && el.props.className.includes("break-all") && harness.textOf(el).includes("Selected:"),
+  )[0];
+  assert.ok(breakAllSelected, "Selected filename must use break-all wrapping for 390px safety");
+  const breakAllParsed = harness.findAll(
+    tree,
+    (el) => el.type === "p" && typeof el.props?.className === "string" && el.props.className.includes("break-all") && harness.textOf(el).includes("Parsed "),
+  )[0];
+  assert.ok(breakAllParsed, "Parsed filename must use break-all wrapping for 390px safety");
+  assert.ok(
+    harness.findAll(tree, (el) => el.type === "button" && harness.textOf(el).includes("Clear file"))[0],
+    "Clear file control must be rendered when cvFile is active",
+  );
+
+  // 3. Short (<15 char) pasted text shows role=alert without calling /cvs/from-text
+  const fromTextBeforeShort = apiCalls.filter((c) => c.pathName === "/cvs/from-text").length;
+  harness.findAll(tree, (el) => el.type === "textarea")[0].props.onChange({ target: { value: "Too short" } });
+  tree = harness.render();
+  assert.doesNotMatch(harness.textOf(tree), /Selected:/, "Typing pasted CV text clears previous cvFile selection");
+  const parseBtnShort = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Parse Pasted CV Now"),
+  )[0];
+  assert.ok(parseBtnShort);
+  await parseBtnShort.props.onClick();
+  tree = harness.render();
+  assert.equal(apiCalls.filter((c) => c.pathName === "/cvs/from-text").length, fromTextBeforeShort);
+  assert.match(harness.textOf(harness.findAll(tree, (el) => el.props?.role === "alert")[0]), /at least 15 characters/);
+
+  // 4. "Parse Pasted CV Now" invokes /cvs/from-text (never /cvs/upload) and clears cvFile
+  const uploadCallsBeforePaste = apiCalls.filter((c) => c.pathName === "/cvs/upload").length;
+  harness.findAll(tree, (el) => el.type === "textarea")[0].props.onChange({
+    target: { value: "Senior AI Engineer experienced in FastAPI, RAG, and production systems." },
+  });
+  tree = harness.render();
+  const parseBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Parse Pasted CV Now"),
+  )[0];
+  await parseBtn.props.onClick();
+  tree = harness.render();
+  assert.equal(apiCalls.filter((c) => c.pathName === "/cvs/upload").length, uploadCallsBeforePaste);
+  assert.equal(apiCalls.filter((c) => c.pathName === "/cvs/from-text").length, 1);
+  assert.match(harness.textOf(tree), /Parsed onboarding-cv\.txt/);
+
+  // 5. Editing pasted CV text invalidates parsedPreview so handleFinish auto-parses via /cvs/from-text + completes onboarding
+  harness.findAll(tree, (el) => el.type === "textarea")[0].props.onChange({
+    target: { value: "Senior ML Engineer with FastAPI and RAG." },
+  });
+  tree = harness.render();
+  assert.doesNotMatch(harness.textOf(tree), /Parsed onboarding-cv\.txt/, "Editing cvText must clear stale parsedPreview");
 
   const finishBtn = harness.findAll(
     tree,
@@ -676,15 +789,16 @@ test("Onboarding (/onboarding) renders min-h-[44px] step controls, accessible CV
   assert.ok(finishBtn);
   await finishBtn.props.onClick();
 
-  const fromTextCall = apiCalls.find((c) => c.pathName === "/cvs/from-text");
+  const fromTextCalls = apiCalls.filter((c) => c.pathName === "/cvs/from-text");
   const completeCall = apiCalls.find((c) => c.pathName === "/profile/complete-onboarding");
-  assert.ok(fromTextCall, "handleFinish must auto-parse pasted CV before completing onboarding");
+  assert.equal(fromTextCalls.length, 2, "handleFinish must auto-parse edited pasted CV via /cvs/from-text");
   assert.ok(completeCall, "handleFinish must POST /profile/complete-onboarding");
   const completePayload = JSON.parse(completeCall.opts.body);
   assert.ok(completePayload.technologies.includes("FastAPI"));
   assert.ok(completePayload.technologies.includes("RAG"));
   assert.equal(completePayload.years_experience, 7);
-  assert.ok(completePayload.languages.includes("German"));
+  assert.ok(completePayload.languages.includes("Spanish"), "File upload parsed languages must be preserved");
+  assert.ok(completePayload.languages.includes("German"), "Pasted CV parsed languages must be merged");
   assert.deepEqual(updatedUsers, [{ onboarding_completed: true }]);
   assert.equal(routes[0], "/dashboard");
 

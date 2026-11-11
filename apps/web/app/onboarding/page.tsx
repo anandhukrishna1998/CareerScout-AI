@@ -210,43 +210,93 @@ function OnboardingWizardInner() {
     setCustomTech("");
   };
 
-  const handleCvUpload = async (fileToUpload?: File) => {
-    const targetFile = fileToUpload || cvFile;
-    if (!targetFile && !cvText.trim()) {
-      const message = "Select a CV file or paste resume text first";
+  const applyParsedCvResult = (result: CVItem) => {
+    setParsedPreview(result);
+    if (result.parsed.skills.length) {
+      setTechnologies((prev) => Array.from(new Set([...prev, ...result.parsed.skills])));
+    }
+    if (result.parsed.years_experience > 0) {
+      setYearsExperience(result.parsed.years_experience);
+    }
+    if (result.parsed.languages?.length) {
+      setLanguages((prev) => {
+        const existing = prev
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        return Array.from(new Set([...existing, ...result.parsed.languages])).join(", ");
+      });
+    }
+  };
+
+  const handleClearFile = () => {
+    setCvFile(null);
+    setParsedPreview(null);
+    setActionError("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleFileUpload = async (fileToUpload: File) => {
+    setActionError("");
+    setParsedPreview(null);
+    setCvFile(fileToUpload);
+    setUploadingCv(true);
+    try {
+      const form = new FormData();
+      form.append("file", fileToUpload);
+      form.append("set_primary", "true");
+      const result = await apiFetch<CVItem>("/cvs/upload", { method: "POST", body: form });
+      applyParsedCvResult(result);
+      pushToast("CV uploaded and parsed!", "success");
+    } catch (err) {
+      setCvFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      const message = err instanceof Error ? err.message : "CV upload failed";
+      setActionError(message);
+      pushToast(message, "error");
+    } finally {
+      setUploadingCv(false);
+    }
+  };
+
+  const handlePasteCvParse = async () => {
+    const trimmed = cvText.trim();
+    if (!trimmed) {
+      const message = "Paste resume text first (at least 15 characters).";
+      setActionError(message);
+      pushToast(message, "error");
+      return;
+    }
+    if (trimmed.length < 15) {
+      const message = "Please paste at least 15 characters of CV text before parsing.";
       setActionError(message);
       pushToast(message, "error");
       return;
     }
     setActionError("");
+    setCvFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    setParsedPreview(null);
     setUploadingCv(true);
     try {
-      let result: CVItem;
-      if (targetFile) {
-        const form = new FormData();
-        form.append("file", targetFile);
-        form.append("set_primary", "true");
-        result = await apiFetch<CVItem>("/cvs/upload", { method: "POST", body: form });
-      } else {
-        result = await apiFetch<CVItem>("/cvs/from-text", {
-          method: "POST",
-          body: JSON.stringify({
-            filename: "onboarding-cv.txt",
-            text: cvText.trim(),
-            set_primary: true,
-          }),
-        });
-      }
-      setParsedPreview(result);
-      if (result.parsed.skills.length) {
-        setTechnologies((prev) => Array.from(new Set([...prev, ...result.parsed.skills])));
-      }
-      if (result.parsed.years_experience > 0) {
-        setYearsExperience(result.parsed.years_experience);
-      }
+      const result = await apiFetch<CVItem>("/cvs/from-text", {
+        method: "POST",
+        body: JSON.stringify({
+          filename: "onboarding-cv.txt",
+          text: trimmed,
+          set_primary: true,
+        }),
+      });
+      applyParsedCvResult(result);
       pushToast("CV uploaded and parsed!", "success");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "CV upload failed";
+      const message = err instanceof Error ? err.message : "CV parsing failed";
       setActionError(message);
       pushToast(message, "error");
     } finally {
@@ -256,6 +306,14 @@ function OnboardingWizardInner() {
 
   const handleFinish = async () => {
     setActionError("");
+    const trimmedCvText = cvText.trim();
+    if (!parsedPreview && !cvFile && trimmedCvText && trimmedCvText.length < 15) {
+      const message = "Please paste at least 15 characters of CV text before finishing.";
+      setActionError(message);
+      pushToast(message, "error");
+      return;
+    }
+
     setSaving(true);
     try {
       let mergedTechs = technologies;
@@ -265,7 +323,7 @@ function OnboardingWizardInner() {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      if (!parsedPreview && (cvFile || cvText.trim())) {
+      if (!parsedPreview && (cvFile || trimmedCvText)) {
         let uploaded: CVItem;
         if (cvFile) {
           const form = new FormData();
@@ -277,7 +335,7 @@ function OnboardingWizardInner() {
             method: "POST",
             body: JSON.stringify({
               filename: "onboarding-cv.txt",
-              text: cvText.trim(),
+              text: trimmedCvText,
               set_primary: true,
             }),
           });
@@ -655,10 +713,10 @@ function OnboardingWizardInner() {
               onDrop={(e) => {
                 e.preventDefault();
                 setIsDragging(false);
+                if (uploadingCv) return;
                 const dropped = e.dataTransfer?.files?.[0] || null;
                 if (dropped) {
-                  setCvFile(dropped);
-                  handleCvUpload(dropped);
+                  handleFileUpload(dropped);
                 }
               }}
               className={`rounded-2xl border border-dashed p-6 text-center transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2 focus-within:ring-offset-surface ${
@@ -687,10 +745,11 @@ function OnboardingWizardInner() {
                 id="onboarding-cv-file"
                 type="file"
                 accept=".pdf,.docx,.txt,.md"
+                disabled={uploadingCv}
                 onChange={(e) => {
                   const f = e.target.files?.[0] || null;
-                  setCvFile(f);
-                  if (f) handleCvUpload(f);
+                  e.target.value = "";
+                  if (f) handleFileUpload(f);
                 }}
                 className="sr-only"
               />
@@ -711,9 +770,20 @@ function OnboardingWizardInner() {
                       : "Choose CV File"}
                 </Button>
                 {cvFile && (
-                  <p className="text-xs font-medium text-ink-secondary">
-                    Selected: <span className="font-mono text-ink">{cvFile.name}</span>
-                  </p>
+                  <div className="flex w-full min-w-0 flex-col items-center gap-1">
+                    <p className="w-full min-w-0 break-all text-xs font-medium text-ink-secondary">
+                      Selected: <span className="font-mono text-ink">{cvFile.name}</span>
+                    </p>
+                    <Button
+                      type="button"
+                      variant="quiet"
+                      size="sm"
+                      disabled={uploadingCv}
+                      onClick={handleClearFile}
+                    >
+                      Clear file
+                    </Button>
+                  </div>
                 )}
               </div>
             </div>
@@ -729,10 +799,24 @@ function OnboardingWizardInner() {
                 id="onboarding-cv-text"
                 rows={4}
                 value={cvText}
-                onChange={(e) => setCvText(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setCvText(next);
+                  setParsedPreview(null);
+                  setActionError("");
+                  if (next.trim()) {
+                    setCvFile(null);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = "";
+                    }
+                  }
+                }}
                 className="input-field"
-                placeholder="Paste summary, experience, and skills..."
+                placeholder="Paste summary, experience, and skills (minimum 15 characters)..."
               />
+              <p className="mt-1.5 text-xs text-muted">
+                Minimum 15 characters required for resume parsing.
+              </p>
               {cvText.trim() && (
                 <div className="mt-2.5 flex flex-wrap items-center gap-3">
                   <Button
@@ -740,7 +824,7 @@ function OnboardingWizardInner() {
                     variant="secondary"
                     size="sm"
                     loading={uploadingCv}
-                    onClick={() => handleCvUpload()}
+                    onClick={handlePasteCvParse}
                   >
                     {uploadingCv ? "Parsing CV..." : "Parse Pasted CV Now"}
                   </Button>
@@ -755,8 +839,10 @@ function OnboardingWizardInner() {
             {parsedPreview && (
               <div className="flex items-start gap-3 rounded-2xl border border-[rgb(var(--status-success-border))] bg-[rgb(var(--status-success-bg))] p-4 text-xs text-[rgb(var(--status-success-fg))]">
                 <CheckIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-semibold text-ink">Parsed {parsedPreview.filename}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="w-full min-w-0 break-all font-semibold text-ink">
+                    Parsed {parsedPreview.filename}
+                  </p>
                   <p className="mt-1 leading-[1.55]">
                     Skills: {parsedPreview.parsed.skills.join(", ") || "None detected"} ·
                     Experience:{" "}

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useToast } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,13 @@ export default function LandingPage() {
   const { user, setSession } = useAuthStore();
   const { pushToast } = useToast();
   const [demoLoading, setDemoLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const isSignedIn = mounted && Boolean(user);
 
   const handleLaunchDemo = async () => {
     if (user) {
@@ -118,10 +125,10 @@ export default function LandingPage() {
 
           <div className="mt-7 flex flex-wrap items-center gap-3">
             <Link
-              href={user ? "/dashboard" : "/auth/register"}
+              href={isSignedIn ? "/dashboard" : "/auth/register"}
               className="btn-primary min-h-[44px] sm:min-h-[40px]"
             >
-              {user ? "Open Dashboard" : "Get Started Free"}
+              {isSignedIn ? "Open Dashboard" : "Get Started Free"}
             </Link>
             <Button variant="secondary" size="md" loading={demoLoading} onClick={handleLaunchDemo}>
               {demoLoading ? "Launching Demo..." : "View Live Demo"}
