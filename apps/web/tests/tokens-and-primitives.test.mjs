@@ -382,3 +382,133 @@ test("UI primitives avoid banned colors, lucide imports, and emoji icons", () =>
     assert.doesNotMatch(content, /[\u{1F300}-\u{1FAFF}\u2713\u25B3]/u);
   }
 });
+
+test("navbar.tsx satisfies Nordic Botanical floating capsule markup, routes, and token bans", () => {
+  const src = fs.readFileSync(path.join(webRoot, "components/navbar.tsx"), "utf8");
+
+  assert.match(src, /data-testid="theme-toggle"/);
+  assert.match(src, /data-testid="theme-toggle-mobile"/);
+
+  for (const route of [
+    "/dashboard",
+    "/jobs",
+    "/saved-jobs",
+    "/cvs",
+    "/ai-insights",
+    "/ai-chat",
+    "/analytics",
+    "/email-settings",
+    "/profile-settings",
+    "/onboarding",
+    "/admin",
+  ]) {
+    assert.ok(src.includes(`"${route}"`), `Expected navbar.tsx to include route ${route}`);
+  }
+
+  for (const label of [
+    "Overview",
+    "Roles",
+    "Saved",
+    "CVs",
+    "Insights",
+    "AI Coach",
+    "Analytics",
+    "Email Digest",
+    "Profile Settings",
+    "Onboarding",
+    "Admin",
+  ]) {
+    assert.ok(src.includes(`"${label}"`), `Expected navbar.tsx to include label ${label}`);
+  }
+
+  assert.match(src, /bg-surface\/90/);
+  assert.match(src, /backdrop-blur-md/);
+  assert.match(src, /border-hairline/);
+  assert.match(src, /shadow-botanical/);
+  assert.match(src, /bg-accent-soft/);
+  assert.match(src, /text-accent-soft-ink/);
+  assert.match(src, /aria-expanded=\{moreOpen\}/);
+  assert.match(src, /pointerdown/);
+  assert.match(src, /Escape/);
+  assert.match(src, /role="dialog"/);
+  assert.match(src, /min-h-\[44px\]/);
+
+  assert.doesNotMatch(
+    src,
+    /shadow-violet|text-amber-300|bg-brand|bg-white|text-white|text-black|violet-|indigo-|purple-|emerald-|rose-|amber-|zinc-|data-preserve-white|\bglass\b|#7c3aed|lucide-react/,
+  );
+  assert.doesNotMatch(src, /[\u{1F300}-\u{1FAFF}\u2713\u25B3]/u);
+});
+
+test("Navbar renders floating capsule, active pill, theme toggles, and onboarding dot across auth states", () => {
+  const renderNavbar = ({ pathname = "/jobs", theme = "light", user = null } = {}) => {
+    const { Navbar } = loadUiModule("components/navbar.tsx", {
+      "next/link": {
+        __esModule: true,
+        default: ({ href, children, ...props }) =>
+          React.createElement("a", { href, ...props }, children),
+      },
+      "next/navigation": {
+        usePathname: () => pathname,
+        useRouter: () => ({ push: () => {} }),
+      },
+      "@/lib/api": {
+        apiFetch: async () => ({}),
+      },
+      "@/store/auth-store": {
+        useAuthStore: () => ({
+          user,
+          refreshToken: null,
+          setSession: () => {},
+          clearSession: () => {},
+        }),
+      },
+      "./providers": {
+        useTheme: () => ({ theme, toggleTheme: () => {} }),
+        useToast: () => ({ pushToast: () => {} }),
+      },
+    });
+    return renderToStaticMarkup(React.createElement(Navbar));
+  };
+
+  const guestHtml = renderNavbar({ pathname: "/jobs", theme: "light", user: null });
+  assert.match(guestHtml, /CareerScout/);
+  assert.match(guestHtml, /data-testid="theme-toggle"/);
+  assert.match(guestHtml, /data-testid="theme-toggle-mobile"/);
+  assert.match(guestHtml, /min-h-\[40px\] min-w-\[40px\]/);
+  assert.match(guestHtml, /h-11 w-11/);
+  assert.match(guestHtml, /aria-expanded="false"/);
+  assert.match(guestHtml, /href="\/jobs"[^>]*aria-current="page"[^>]*bg-accent-soft/);
+  assert.match(guestHtml, /Try Demo/);
+  assert.match(guestHtml, /href="\/auth\/login"[^>]*>Sign in</);
+  assert.match(guestHtml, /href="\/auth\/register"[^>]*>Get Started</);
+
+  const onboardingUserHtml = renderNavbar({
+    pathname: "/dashboard",
+    theme: "dark",
+    user: {
+      id: 1,
+      email: "ada@example.com",
+      full_name: "Ada Lovelace",
+      role: "user",
+      onboarding_completed: false,
+    },
+  });
+  assert.match(onboardingUserHtml, /Ada Lovelace/);
+  assert.match(onboardingUserHtml, /Sign out/);
+  assert.match(onboardingUserHtml, /Onboarding incomplete/);
+  assert.match(onboardingUserHtml, /Switch to light mode/);
+  assert.doesNotMatch(onboardingUserHtml, /Try Demo/);
+});
+
+test("Sidebar is retired to a clean null-returning compatibility stub", () => {
+  const src = fs.readFileSync(path.join(webRoot, "components/sidebar.tsx"), "utf8");
+  assert.doesNotMatch(
+    src,
+    /\bglass\b|violet-|amber-|bg-brand|zinc-|text-white|bg-white|lucide-react/,
+  );
+
+  const { Sidebar } = loadUiModule("components/sidebar.tsx");
+  const html = renderToStaticMarkup(React.createElement(Sidebar));
+  assert.equal(html, "");
+});
