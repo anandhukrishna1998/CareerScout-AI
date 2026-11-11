@@ -3,9 +3,68 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { LIGHT_TOKENS, DARK_TOKENS, contrastRatio, clampScore } from "../lib/theme-tokens.mjs";
+import { createRequire } from "node:module";
+import {
+  LIGHT_TOKENS,
+  DARK_TOKENS,
+  contrastRatio,
+  clampScore,
+  scoreBand,
+} from "../lib/theme-tokens.mjs";
 
 const webRoot = path.resolve(import.meta.dirname, "..");
+const webRequire = createRequire(path.join(webRoot, "package.json"));
+const ts = webRequire("typescript");
+const React = webRequire("react");
+const { renderToStaticMarkup } = webRequire("react-dom/server");
+
+function loadUiModule(relPath, mocks = {}) {
+  const cache = new Map();
+
+  function compileAndRun(filePath) {
+    if (cache.has(filePath)) {
+      return cache.get(filePath).exports;
+    }
+
+    const source = fs.readFileSync(filePath, "utf8");
+    const { outputText } = ts.transpileModule(source, {
+      fileName: filePath,
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        jsx: ts.JsxEmit.ReactJSX,
+        esModuleInterop: true,
+      },
+    });
+
+    const moduleObj = { exports: {} };
+    cache.set(filePath, moduleObj);
+
+    const localRequire = (specifier) => {
+      if (Object.hasOwn(mocks, specifier)) {
+        return mocks[specifier];
+      }
+      if (specifier === "@/lib/theme-tokens" || specifier === "@/lib/theme-tokens.mjs") {
+        return { LIGHT_TOKENS, DARK_TOKENS, contrastRatio, clampScore, scoreBand };
+      }
+      if (specifier.startsWith(".")) {
+        const base = path.resolve(path.dirname(filePath), specifier);
+        for (const candidate of [`${base}.tsx`, `${base}.ts`, base]) {
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            return compileAndRun(candidate);
+          }
+        }
+      }
+      return webRequire(specifier);
+    };
+
+    const fn = new Function("require", "module", "exports", outputText);
+    fn(localRequire, moduleObj, moduleObj.exports);
+    return moduleObj.exports;
+  }
+
+  return compileAndRun(path.join(webRoot, relPath));
+}
 
 test("Light and Dark semantic palettes pass WCAG 2.2 AA contrast", () => {
   assert.ok(contrastRatio(LIGHT_TOKENS.textPrimary, LIGHT_TOKENS.bgCanvas) >= 4.5);
@@ -118,4 +177,208 @@ test("providers.tsx defaults theme to light, reads careerscout-theme overrides, 
   assert.match(providers, /--bg-surface/);
   assert.match(providers, /--border-hairline/);
   assert.doesNotMatch(providers, /violet-|zinc-|emerald-|rose-/);
+});
+
+test("clampScore and scoreBand map ATS bands accurately", () => {
+  assert.equal(clampScore(-10), 0);
+  assert.equal(clampScore(135), 100);
+  assert.equal(scoreBand(91), "strong");
+  assert.equal(scoreBand(80), "strong");
+  assert.equal(scoreBand(72), "moderate");
+  assert.equal(scoreBand(60), "moderate");
+  assert.equal(scoreBand(48), "low");
+  assert.equal(scoreBand(Number.NaN), "low");
+});
+
+test("Surface renders elevated, subtle, and hero variants with concentric radii", () => {
+  const { Surface } = loadUiModule("components/ui/surface.tsx");
+
+  const defaultHtml = renderToStaticMarkup(
+    React.createElement(Surface, { "data-testid": "card" }, "Body"),
+  );
+  assert.match(defaultHtml, /bg-surface/);
+  assert.match(defaultHtml, /border-hairline/);
+  assert.match(defaultHtml, /shadow-botanical/);
+  assert.match(defaultHtml, /rounded-2xl/);
+  assert.match(defaultHtml, /data-testid="card"/);
+
+  const subtleHtml = renderToStaticMarkup(
+    React.createElement(Surface, { variant: "subtle", radius: "xl" }, "Well"),
+  );
+  assert.match(subtleHtml, /bg-subtle/);
+  assert.doesNotMatch(subtleHtml, /shadow-botanical/);
+  assert.match(subtleHtml, /rounded-xl/);
+
+  const heroHtml = renderToStaticMarkup(
+    React.createElement(Surface, { variant: "hero", radius: "3xl", className: "p-8" }, "Hero"),
+  );
+  assert.match(heroHtml, /rounded-3xl/);
+  assert.match(heroHtml, /shadow-botanical/);
+  assert.match(heroHtml, /p-8/);
+});
+
+test("Button renders accessible 44px mobile touch targets, focus rings, variants, and loading state", () => {
+  const { Button } = loadUiModule("components/ui/button.tsx");
+
+  const primaryHtml = renderToStaticMarkup(React.createElement(Button, null, "Explore Role"));
+  assert.match(primaryHtml, /type="button"/);
+  assert.match(primaryHtml, /rounded-full/);
+  assert.match(primaryHtml, /bg-accent/);
+  assert.match(primaryHtml, /min-h-\[44px\]/);
+  assert.match(primaryHtml, /sm:min-h-\[40px\]/);
+  assert.match(primaryHtml, /focus-visible:ring-2/);
+
+  const smDangerHtml = renderToStaticMarkup(
+    React.createElement(Button, { variant: "danger", size: "sm", loading: true }, "Remove"),
+  );
+  assert.match(smDangerHtml, /min-h-\[44px\]/);
+  assert.match(smDangerHtml, /sm:min-h-\[36px\]/);
+  assert.match(smDangerHtml, /bg-status-danger-bg/);
+  assert.match(smDangerHtml, /disabled=""/);
+  assert.match(smDangerHtml, /aria-busy="true"/);
+  assert.match(smDangerHtml, /<svg[^>]*aria-hidden="true"/);
+});
+
+test("Badge renders semantic pill tones without ALL-CAPS transformation", () => {
+  const { Badge } = loadUiModule("components/ui/badge.tsx");
+
+  for (const [tone, expectedToken] of [
+    ["neutral", "--bg-subtle"],
+    ["accent", "--accent-soft"],
+    ["success", "--status-success-bg"],
+    ["warning", "--status-warning-bg"],
+    ["danger", "--status-danger-bg"],
+  ]) {
+    const html = renderToStaticMarkup(React.createElement(Badge, { tone }, tone));
+    assert.match(html, /rounded-full/);
+    assert.ok(html.includes(expectedToken), `Expected ${tone} badge to reference ${expectedToken}`);
+    assert.doesNotMatch(html, /\buppercase\b/);
+  }
+});
+
+test("ScoreRing computes SVG strokeDashoffset math, clamps values, and maps semantic band colors", () => {
+  const { ScoreRing } = loadUiModule("components/ui/score-ring.tsx");
+
+  const strongHtml = renderToStaticMarkup(
+    React.createElement(ScoreRing, { score: 91, label: "Strong Fit", size: "lg" }),
+  );
+  assert.match(strongHtml, /role="meter"/);
+  assert.match(strongHtml, /aria-valuenow="91"/);
+  assert.match(strongHtml, /aria-valuemin="0"/);
+  assert.match(strongHtml, /aria-valuemax="100"/);
+  assert.match(strongHtml, /tabular-nums/);
+  assert.match(strongHtml, /font-mono/);
+  assert.match(strongHtml, /stroke="rgb\(var\(--accent\)\)"/);
+  assert.match(strongHtml, /Strong Fit/);
+  assert.match(strongHtml, />91</);
+  assert.match(strongHtml, />\/100</);
+
+  const moderateHtml = renderToStaticMarkup(React.createElement(ScoreRing, { score: 72 }));
+  assert.match(moderateHtml, /stroke="rgb\(var\(--text-secondary\)\)"/);
+
+  const roundedBoundaryHtml = renderToStaticMarkup(React.createElement(ScoreRing, { score: 79.6 }));
+  assert.match(roundedBoundaryHtml, /aria-valuenow="80"/);
+  assert.match(roundedBoundaryHtml, /stroke="rgb\(var\(--accent\)\)"/);
+
+  const lowHtml = renderToStaticMarkup(React.createElement(ScoreRing, { score: 48, size: "sm" }));
+  assert.match(lowHtml, /stroke="rgb\(var\(--status-warning-fg\)\)"/);
+  assert.doesNotMatch(lowHtml, />\/100</);
+
+  const zeroHtml = renderToStaticMarkup(React.createElement(ScoreRing, { score: -10 }));
+  assert.match(zeroHtml, /aria-valuenow="0"/);
+  assert.match(zeroHtml, /stroke-opacity="0"/);
+
+  const fullHtml = renderToStaticMarkup(React.createElement(ScoreRing, { score: 135 }));
+  assert.match(fullHtml, /aria-valuenow="100"/);
+  assert.match(fullHtml, /stroke-dashoffset="0"/);
+});
+
+test("SectionState renders geometric loading skeletons, role=alert error with Retry, and empty guidance", () => {
+  const { SectionState } = loadUiModule("components/ui/section-state.tsx");
+
+  const loadingHtml = renderToStaticMarkup(
+    React.createElement(SectionState, {
+      status: "loading",
+      title: "Loading matches",
+      skeletonLines: 4,
+    }),
+  );
+  assert.match(loadingHtml, /role="status"/);
+  assert.match(loadingHtml, /aria-busy="true"/);
+  assert.match(loadingHtml, /Loading matches/);
+  const lineMatches = loadingHtml.match(/h-4 rounded-md bg-subtle/g) ?? [];
+  assert.equal(lineMatches.length, 4);
+
+  const errorHtml = renderToStaticMarkup(
+    React.createElement(SectionState, {
+      status: "error",
+      title: "Unable to reach matching service",
+      description: "Check your connection and try again.",
+      onRetry: () => {},
+    }),
+  );
+  assert.match(errorHtml, /role="alert"/);
+  assert.match(errorHtml, /Unable to reach matching service/);
+  assert.match(errorHtml, /Check your connection and try again\./);
+  assert.match(errorHtml, />Retry</);
+
+  const emptyHtml = renderToStaticMarkup(
+    React.createElement(SectionState, {
+      status: "empty",
+      title: "No primary CV uploaded",
+      description: "Upload a resume to unlock ATS scoring.",
+      action: React.createElement("a", { href: "/cvs" }, "Upload CV"),
+    }),
+  );
+  assert.match(emptyHtml, /No primary CV uploaded/);
+  assert.match(emptyHtml, /Upload a resume to unlock ATS scoring\./);
+  assert.match(emptyHtml, /href="\/cvs"/);
+});
+
+test("MotionReveal honors useReducedMotion and limits animation to opacity and y in 150-220ms", () => {
+  const realFramer = webRequire("framer-motion");
+
+  const reducedMod = loadUiModule("components/ui/motion-reveal.tsx", {
+    "framer-motion": { ...realFramer, useReducedMotion: () => true },
+  });
+  const reducedHtml = renderToStaticMarkup(
+    React.createElement(reducedMod.MotionReveal, { delay: 0.1, className: "card" }, "Visible"),
+  );
+  assert.equal(reducedHtml, '<div class="card">Visible</div>');
+
+  const activeMod = loadUiModule("components/ui/motion-reveal.tsx", {
+    "framer-motion": { ...realFramer, useReducedMotion: () => false },
+  });
+  const activeHtml = renderToStaticMarkup(
+    React.createElement(activeMod.MotionReveal, { delay: 0.05 }, "Animated"),
+  );
+  assert.match(activeHtml, /opacity:\s*0/);
+  assert.match(activeHtml, /translateY\(8px\)/);
+
+  const src = fs.readFileSync(path.join(webRoot, "components/ui/motion-reveal.tsx"), "utf8");
+  assert.match(src, /useReducedMotion\(\)/);
+  assert.match(src, /duration:\s*0\.(1[5-9]|2[0-2]?)\b/);
+});
+
+test("UI primitives avoid banned colors, lucide imports, and emoji icons", () => {
+  const uiDir = path.join(webRoot, "components/ui");
+  const files = fs.readdirSync(uiDir).filter((name) => name.endsWith(".tsx"));
+  assert.deepEqual(files.sort(), [
+    "badge.tsx",
+    "button.tsx",
+    "motion-reveal.tsx",
+    "score-ring.tsx",
+    "section-state.tsx",
+    "surface.tsx",
+  ]);
+
+  for (const file of files) {
+    const content = fs.readFileSync(path.join(uiDir, file), "utf8");
+    assert.doesNotMatch(
+      content,
+      /bg-white|text-white|text-black|violet-|indigo-|purple-|radial-gradient/,
+    );
+    assert.doesNotMatch(content, /lucide-react/);
+    assert.doesNotMatch(content, /[\u{1F300}-\u{1FAFF}\u2713\u25B3]/u);
+  }
 });

@@ -103,3 +103,10 @@ export function clampScore(score) {
   }
   return Math.min(100, Math.max(0, score));
 }
+
+export function scoreBand(score) {
+  const safe = clampScore(score);
+  if (safe >= 80) return "strong";
+  if (safe >= 60) return "moderate";
+  return "low";
+}
