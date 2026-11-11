@@ -389,7 +389,7 @@ test("FilterPanel starts collapsed on mobile, toggles via aria-expanded, binds e
   assert.match(html, /class="hidden space-y-4/);
   assert.match(html, /accent-\[rgb\(var\(--accent\)\)\]/);
   assert.match(html, /min-h-\[44px\] w-full cursor-pointer/);
-  assert.match(html, /min-h-\[44px\][^"]*lg:min-h-\[32px\]/);
+  assert.match(html, /min-h-\[44px\] min-w-\[44px\] items-center justify-center[^"]*lg:min-h-\[32px\] lg:min-w-0/);
   assert.match(html, /font-mono[^>]*tabular-nums[^>]*>70%</);
   assert.match(html, /font-mono[^>]*tabular-nums[^>]*>6</);
   assert.match(html, />Retry</);
@@ -488,10 +488,28 @@ test("AIChatPanel renders accessible labels, studio bubble tokens, no nested ari
   }
 });
 
-test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on send failure, and disables Clear while sending", async () => {
+test("AIChatPanel handles loadError + Retry recovery, optimistic rollback, newer draft preservation, Clear/loading lock safety, and JobDetail score fallback", async () => {
   let failLoad = true;
   let resolvePost = null;
   let rejectPost = null;
+  let resolveDelete = null;
+  let postCallCount = 0;
+  let jobDetailPayload = {
+    id: 99,
+    title: "Research Engineer",
+    company: "Boreal Labs",
+    match: {
+      score: 87,
+      skill_score: 52,
+      semantic_score: 21,
+      experience_score: 14,
+      matched_skills: ["Python"],
+      strengths: ["Python"],
+      missing_skills: [],
+      action_items: [],
+      recommendation: "Strong fit",
+    },
+  };
   const toastCalls = [];
 
   const harness = createInteractiveHarness(
@@ -521,6 +539,11 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
               ],
             });
           }
+          if (pathName === "/ai/chat/history" && opts?.method === "DELETE") {
+            return new Promise((resolve) => {
+              resolveDelete = resolve;
+            });
+          }
           if (pathName.startsWith("/jobs?")) {
             if (failLoad) return Promise.reject(new Error("Jobs service unavailable"));
             return Promise.resolve({
@@ -539,7 +562,11 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
               available_sources: [],
             });
           }
+          if (pathName === "/jobs/99" || pathName === "/jobs/100") {
+            return Promise.resolve(jobDetailPayload);
+          }
           if (pathName === "/ai/chat" && opts?.method === "POST") {
+            postCallCount += 1;
             return new Promise((resolve, reject) => {
               resolvePost = resolve;
               rejectPost = reject;
@@ -551,16 +578,30 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
     }),
   );
 
+  // 0. While initial load is pending (loadingHistory=true), controls are locked and form submission is ignored
+  let tree = harness.render({ initialJobId: 99 });
+  const initSelect = harness.findAll(tree, (el) => el.type === "select")[0];
+  const initInput = harness.findAll(tree, (el) => el.type === "input")[0];
+  const initSendBtn = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Send"),
+  )[0];
+  const initForm = harness.findAll(tree, (el) => el.type === "form")[0];
+  assert.equal(initSelect.props.disabled, true);
+  assert.equal(initInput.props.disabled, true);
+  assert.equal(initSendBtn.props.disabled, true);
+  initForm.props.onSubmit({ preventDefault: () => {} });
+  assert.equal(postCallCount, 0);
+
   // 1. Initial failed load shows role=alert + Retry and hides composer form
-  harness.render({});
   await harness.flushEffects();
-  let tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
   const alerts = harness.findAll(tree, (el) => el.props?.role === "alert");
   assert.equal(alerts.length, 1);
   assert.match(harness.textOf(alerts[0]), /History service unavailable/);
   assert.equal(harness.findAll(tree, (el) => el.type === "form").length, 0);
 
-  // 2. Clicking Retry recovers and displays loaded conversation + composer form
+  // 2. Clicking Retry recovers, displays JobDetail match.score (87%) without undefined%, and unlocks composer
   failLoad = false;
   const retryBtn = harness.findAll(
     tree,
@@ -569,19 +610,21 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
   assert.ok(retryBtn);
   retryBtn.props.onClick();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
   assert.equal(harness.findAll(tree, (el) => el.props?.role === "alert").length, 0);
   assert.equal(harness.findAll(tree, (el) => el.type === "form").length, 1);
   assert.match(harness.textOf(tree), /Initial guidance/);
+  assert.match(harness.textOf(tree), /Research Engineer @ Boreal Labs \(87%\)/);
+  assert.doesNotMatch(harness.textOf(tree), /undefined%/);
 
-  // 3. Submit message -> loading shimmer appears & Clear is disabled while in-flight
+  // 3. Submit message -> loading shimmer appears; Clear & select are disabled while Send is in-flight
   let chatInput = harness.findAll(tree, (el) => el.type === "input")[0];
   chatInput.props.onChange({ target: { value: "Improve my CV summary" } });
-  tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
 
   const form = harness.findAll(tree, (el) => el.type === "form")[0];
   form.props.onSubmit({ preventDefault: () => {} });
-  tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
 
   assert.match(harness.textOf(tree), /Improve my CV summary/);
   assert.match(harness.textOf(tree), /Analyzing profile and job context/);
@@ -589,13 +632,20 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
     tree,
     (el) => el.type === "button" && harness.textOf(el) === "Clear",
   )[0];
+  const selectWhileLoading = harness.findAll(tree, (el) => el.type === "select")[0];
+  const sendBtnWhileLoading = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Send"),
+  )[0];
   assert.ok(clearBtnWhileLoading);
   assert.equal(clearBtnWhileLoading.props.disabled, true);
+  assert.equal(selectWhileLoading.props.disabled, true);
+  assert.equal(sendBtnWhileLoading.props.disabled, true);
 
-  // 4. Reject POST /ai/chat -> optimistic user bubble removed, input restored, role=alert shown
+  // 4. Reject POST /ai/chat when no newer draft exists -> optimistic bubble removed, failed prompt restored
   rejectPost(new Error("AI timeout"));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
 
   assert.doesNotMatch(harness.textOf(tree), /Improve my CV summary/);
   chatInput = harness.findAll(tree, (el) => el.type === "input")[0];
@@ -605,10 +655,24 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
   assert.match(harness.textOf(sendAlerts[0]), /AI timeout/);
   assert.equal(toastCalls.at(-1)?.kind, "error");
 
-  // 5. Successful resubmit appends assistant reply and re-enables Clear
-  const formRetry = harness.findAll(tree, (el) => el.type === "form")[0];
-  formRetry.props.onSubmit({ preventDefault: () => {} });
-  tree = harness.render({});
+  // 5. While resend is in-flight, user types a newer draft; rejection MUST NOT overwrite newer draft
+  harness.findAll(tree, (el) => el.type === "form")[0].props.onSubmit({ preventDefault: () => {} });
+  tree = harness.render({ initialJobId: 99 });
+  harness.findAll(tree, (el) => el.type === "input")[0].props.onChange({
+    target: { value: "Follow-up draft while waiting" },
+  });
+  tree = harness.render({ initialJobId: 99 });
+  rejectPost(new Error("Temporary hiccup"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  tree = harness.render({ initialJobId: 99 });
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "input")[0].props.value,
+    "Follow-up draft while waiting",
+  );
+
+  // 6. Successful submit appends assistant reply and re-enables Clear
+  harness.findAll(tree, (el) => el.type === "form")[0].props.onSubmit({ preventDefault: () => {} });
+  tree = harness.render({ initialJobId: 99 });
   resolvePost({
     reply: "Quantify RAG latency reductions.",
     message: {
@@ -620,7 +684,7 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  tree = harness.render({});
+  tree = harness.render({ initialJobId: 99 });
   assert.match(harness.textOf(tree), /Quantify RAG latency reductions\./);
   const clearBtnReady = harness.findAll(
     tree,
@@ -628,5 +692,67 @@ test("AIChatPanel handles loadError + Retry recovery, optimistic rollback on sen
   )[0];
   assert.equal(clearBtnReady.props.disabled, false);
 
+  // 7. Clicking Clear locks composer/select/Send while DELETE is in-flight so Clear-then-Send cannot wedge loading=true
+  clearBtnReady.props.onClick();
+  tree = harness.render({ initialJobId: 99 });
+  const selectWhileClearing = harness.findAll(tree, (el) => el.type === "select")[0];
+  const inputWhileClearing = harness.findAll(tree, (el) => el.type === "input")[0];
+  const sendBtnWhileClearing = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Send"),
+  )[0];
+  assert.equal(selectWhileClearing.props.disabled, true);
+  assert.equal(inputWhileClearing.props.disabled, true);
+  assert.equal(sendBtnWhileClearing.props.disabled, true);
+  inputWhileClearing.props.onChange({ target: { value: "Raced send during clear" } });
+  const countBeforeClearRace = postCallCount;
+  harness.findAll(tree, (el) => el.type === "form")[0].props.onSubmit({ preventDefault: () => {} });
+  assert.equal(postCallCount, countBeforeClearRace);
+
+  resolveDelete({ ok: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  tree = harness.render({ initialJobId: 99 });
+  assert.equal(harness.findAll(tree, (el) => el.props?.["aria-label"] === "Analyzing profile and job context").length, 0);
+  const selectAfterClear = harness.findAll(tree, (el) => el.type === "select")[0];
+  assert.equal(selectAfterClear.props.disabled, false);
+
+  // After clearing, suggested prompt starters appear and are enabled
+  const promptButtons = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("missing skills"),
+  );
+  assert.equal(promptButtons.length, 1);
+  assert.equal(promptButtons[0].props.disabled, false);
+
   harness.unmount();
+
+  // 8. Verify JobDetail without match & without top-level score renders cleanly with zero "undefined%"
+  jobDetailPayload = {
+    id: 100,
+    title: "Staff ML Engineer",
+    company: "Krono",
+    match: null,
+  };
+  const noScoreHarness = createInteractiveHarness(
+    "components/ai-chat-panel.tsx",
+    "AIChatPanel",
+    (reactMock) => ({
+      ...commonMocks,
+      react: reactMock,
+      "@/lib/api": {
+        apiFetch: (pathName) => {
+          if (pathName === "/ai/chat/history") return Promise.resolve({ items: [] });
+          if (pathName.startsWith("/jobs?")) return Promise.resolve({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1, available_sources: [] });
+          if (pathName === "/jobs/100") return Promise.resolve(jobDetailPayload);
+          return Promise.resolve({});
+        },
+      },
+    }),
+  );
+  noScoreHarness.render({ initialJobId: 100 });
+  await noScoreHarness.flushEffects();
+  const noScoreTree = noScoreHarness.render({ initialJobId: 100 });
+  assert.match(noScoreHarness.textOf(noScoreTree), /Staff ML Engineer @ Krono/);
+  assert.doesNotMatch(noScoreHarness.textOf(noScoreTree), /undefined%/);
+  noScoreHarness.unmount();
 });

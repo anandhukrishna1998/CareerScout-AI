@@ -230,7 +230,7 @@ export function FilterPanel({
                     type="button"
                     aria-pressed={active}
                     onClick={() => update("country", qc.value)}
-                    className={`inline-flex min-h-[44px] items-center rounded-full border px-3 py-1 text-xs font-medium transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:min-h-[32px] lg:px-2.5 lg:text-[11px] ${
+                    className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border px-3 py-1 text-xs font-medium transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:min-h-[32px] lg:min-w-0 lg:px-2.5 lg:text-[11px] ${
                       active
                         ? "border-[rgb(var(--accent)/0.3)] bg-accent-soft text-accent-soft-ink"
                         : "border-hairline bg-subtle text-ink-secondary hover:bg-hover hover:text-ink"

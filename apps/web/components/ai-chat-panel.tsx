@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
-import type { ChatMessage, JobItem, JobListResponse } from "@/lib/types";
+import type { ChatMessage, JobDetail, JobItem, JobListResponse } from "@/lib/types";
 import { useToast } from "./providers";
 import { Button } from "./ui/button";
 import { SectionState } from "./ui/section-state";
@@ -10,6 +10,13 @@ import { Surface } from "./ui/surface";
 
 export type AIChatPanelProps = {
   initialJobId?: number | null;
+};
+
+type FallbackJobSummary = {
+  id: number;
+  title: string;
+  company: string;
+  score: number | null;
 };
 
 const SUGGESTED_PROMPTS = [
@@ -49,7 +56,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(initialJobId ?? null);
-  const [fallbackJob, setFallbackJob] = useState<JobItem | null>(null);
+  const [fallbackJob, setFallbackJob] = useState<FallbackJobSummary | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -95,16 +102,29 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
 
       const targetJobId = selectedJobIdRef.current;
       if (targetJobId !== null && !loadedJobs.some((j) => j.id === targetJobId)) {
-        apiFetch<JobItem>(`/jobs/${targetJobId}`)
-          .then((job) => {
+        apiFetch<JobDetail>(`/jobs/${targetJobId}`)
+          .then((detail) => {
             if (!mountedRef.current || seq !== loadSeqRef.current) return;
             if (
-              job &&
-              typeof job.id === "number" &&
-              typeof job.title === "string" &&
-              typeof job.company === "string"
+              detail &&
+              typeof detail.id === "number" &&
+              typeof detail.title === "string" &&
+              typeof detail.company === "string"
             ) {
-              setFallbackJob(job);
+              const rawMatchScore = detail.match?.score;
+              const rawTopScore = detail.score;
+              const score =
+                typeof rawMatchScore === "number" && Number.isFinite(rawMatchScore)
+                  ? rawMatchScore
+                  : typeof rawTopScore === "number" && Number.isFinite(rawTopScore)
+                    ? rawTopScore
+                    : null;
+              setFallbackJob({
+                id: detail.id,
+                title: detail.title,
+                company: detail.company,
+                score,
+              });
             }
           })
           .catch(() => {
@@ -135,7 +155,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
 
   const sendMessage = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || loading || loadError) return;
+    if (!text || loading || loadError || clearing || loadingHistory) return;
 
     const sendClearSeq = clearSeqRef.current;
     setSendError(null);
@@ -160,19 +180,19 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
     } catch (err) {
       if (!mountedRef.current || sendClearSeq !== clearSeqRef.current) return;
       setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
-      if (!textOverride) setInput(text);
+      if (!textOverride) setInput((cur) => (cur.trim() ? cur : text));
       const msg = err instanceof Error ? err.message : "Failed to send message";
       setSendError(msg);
       pushToast(msg, "error");
     } finally {
-      if (mountedRef.current && sendClearSeq === clearSeqRef.current) {
+      if (mountedRef.current) {
         setLoading(false);
       }
     }
   };
 
   const handleClear = async () => {
-    if (clearing || loading) return;
+    if (clearing || loading || loadingHistory) return;
     setClearing(true);
     try {
       await apiFetch("/ai/chat/history", { method: "DELETE" });
@@ -217,20 +237,21 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
             <select
               id={contextSelectId}
               value={selectedJobId ?? ""}
+              disabled={loading || clearing || loadingHistory}
               onChange={(e) => setSelectedJobId(e.target.value ? Number(e.target.value) : null)}
-              className="input-field min-h-[44px] max-w-[260px] py-1.5 text-xs sm:min-h-[38px]"
+              className="input-field min-h-[44px] max-w-[260px] py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[38px]"
             >
               <option value="">General Career Context</option>
               {selectedJobId !== null && !hasSelectedInJobs && (
                 <option value={selectedJobId}>
                   {matchedFallback
-                    ? `${matchedFallback.title} @ ${matchedFallback.company}${matchedFallback.score !== null ? ` (${matchedFallback.score}%)` : ""}`
+                    ? `${matchedFallback.title} @ ${matchedFallback.company}${typeof matchedFallback.score === "number" ? ` (${matchedFallback.score}%)` : ""}`
                     : `Selected role #${selectedJobId}`}
                 </option>
               )}
               {jobs.map((j) => (
                 <option key={j.id} value={j.id}>
-                  {j.title} @ {j.company} {j.score !== null ? `(${j.score}%)` : ""}
+                  {`${j.title} @ ${j.company}${typeof j.score === "number" ? ` (${j.score}%)` : ""}`}
                 </option>
               ))}
             </select>
@@ -240,7 +261,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
                 variant="secondary"
                 size="sm"
                 loading={clearing}
-                disabled={clearing || loading}
+                disabled={clearing || loading || loadingHistory}
                 onClick={handleClear}
               >
                 Clear
@@ -303,7 +324,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
                     <button
                       key={p}
                       type="button"
-                      disabled={loading}
+                      disabled={loading || clearing || loadingHistory}
                       onClick={() => sendMessage(p)}
                       className="min-h-[44px] rounded-full border border-hairline bg-surface px-3.5 py-2 text-xs font-medium text-ink-secondary transition-colors duration-150 hover:border-accent/40 hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:min-h-[36px]"
                     >
@@ -380,6 +401,7 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (loading || clearing || loadingHistory || loadError) return;
                 sendMessage();
               }}
               className="flex flex-col gap-2 sm:flex-row sm:items-center"
@@ -391,18 +413,19 @@ export function AIChatPanel({ initialJobId }: AIChatPanelProps) {
                 id={chatInputId}
                 type="text"
                 value={input}
+                disabled={clearing || loadingHistory}
                 onChange={(e) => {
                   setInput(e.target.value);
                   if (sendError) setSendError(null);
                 }}
-                className="input-field min-h-[44px]"
+                className="input-field min-h-[44px] disabled:cursor-not-allowed disabled:opacity-60"
                 placeholder="How can I improve my ATS score for ML Engineer roles?"
               />
               <Button
                 type="submit"
                 variant="primary"
                 size="md"
-                disabled={loading || !input.trim()}
+                disabled={loading || clearing || loadingHistory || !input.trim()}
                 className="min-h-[44px] shrink-0"
               >
                 <span>Send</span>
