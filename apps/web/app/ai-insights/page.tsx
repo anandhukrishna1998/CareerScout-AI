@@ -98,8 +98,13 @@ function AIInsightsContent() {
     void loadInsights();
   }, [loadInsights]);
 
-  const maxMissing = Math.max(1, ...(data?.top_missing_skills ?? []).map((s) => s.demand_count));
-  const maxMarket = Math.max(1, ...(data?.market_skill_demand ?? []).map((s) => s.demand_count));
+  const topMissingSkills = data?.top_missing_skills ?? [];
+  const topStrengths = data?.top_strengths ?? [];
+  const marketDemand = data?.market_skill_demand ?? [];
+  const recommendations = data?.recommendations ?? [];
+
+  const maxMissing = Math.max(1, ...topMissingSkills.map((s) => s.demand_count));
+  const maxMarket = Math.max(1, ...marketDemand.map((s) => s.demand_count));
   const readinessScore = data ? Math.round(clampScore(data.ats_readiness_score)) : 0;
   const band = scoreBand(readinessScore);
   const bandLabel =
@@ -191,7 +196,7 @@ function AIInsightsContent() {
                 <div className="min-w-0 rounded-xl border border-hairline bg-subtle px-3.5 py-2.5">
                   <p className="text-xs text-muted">High-ROI Gaps</p>
                   <p className="mt-0.5 font-mono text-lg font-semibold tabular-nums text-ink">
-                    {data.top_missing_skills.length}
+                    {topMissingSkills.length}
                   </p>
                 </div>
               </div>
@@ -212,13 +217,13 @@ function AIInsightsContent() {
                   </span>
                 </div>
 
-                {data.top_strengths.length > 0 && (
+                {topStrengths.length > 0 && (
                   <div>
                     <p className="mb-2 text-xs font-medium text-muted">
                       Verified profile strengths
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {data.top_strengths.slice(0, 8).map((strength, idx) => (
+                      {topStrengths.slice(0, 8).map((strength, idx) => (
                         <Badge key={`${strength.skill}-${idx}`} tone="accent">
                           <CheckIcon />
                           <span>{strength.skill}</span>
@@ -233,13 +238,13 @@ function AIInsightsContent() {
 
                 <div>
                   <p className="mb-2.5 text-xs font-medium text-muted">Recommended next steps</p>
-                  {data.recommendations.length === 0 ? (
+                  {recommendations.length === 0 ? (
                     <p className="text-sm text-ink-secondary">
                       Upload a primary CV or sync more roles to generate tailored recommendations.
                     </p>
                   ) : (
                     <ul className="space-y-2.5">
-                      {data.recommendations.map((rec, idx) => (
+                      {recommendations.map((rec, idx) => (
                         <li
                           key={`${rec}-${idx}`}
                           className="flex items-start gap-2.5 rounded-xl border border-hairline bg-subtle px-4 py-3 text-sm leading-[1.55] text-ink-secondary"
@@ -262,7 +267,7 @@ function AIInsightsContent() {
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Top Missing Skills by Impact
               </h2>
-              {data.top_missing_skills.length === 0 ? (
+              {topMissingSkills.length === 0 ? (
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <Badge tone="success">No major missing skills</Badge>
                   <p className="text-sm text-ink-secondary">
@@ -271,7 +276,7 @@ function AIInsightsContent() {
                 </div>
               ) : (
                 <div className="mt-4 space-y-3.5">
-                  {data.top_missing_skills.map((item, idx) => (
+                  {topMissingSkills.map((item, idx) => (
                     <div key={`${item.skill}-${idx}`} className="min-w-0">
                       <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
                         <span className="min-w-0 truncate font-medium text-ink">{item.skill}</span>
@@ -283,7 +288,7 @@ function AIInsightsContent() {
                         <div
                           className="h-full rounded-full bg-[rgb(var(--status-warning-fg))]"
                           style={{
-                            width: `${Math.min(100, Math.max(4, Math.round((item.demand_count / maxMissing) * 100)))}%`,
+                            width: `${item.demand_count > 0 ? Math.min(100, Math.max(4, Math.round((item.demand_count / maxMissing) * 100))) : 0}%`,
                           }}
                         />
                       </div>
@@ -297,11 +302,11 @@ function AIInsightsContent() {
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Top Market Demand vs Your Coverage
               </h2>
-              {data.market_skill_demand.length === 0 ? (
+              {marketDemand.length === 0 ? (
                 <p className="mt-4 text-sm text-muted">No skill demand breakdown available yet.</p>
               ) : (
                 <div className="mt-4 space-y-3.5">
-                  {data.market_skill_demand.map((item, idx) => (
+                  {marketDemand.map((item, idx) => (
                     <div key={`${item.skill}-${idx}`} className="min-w-0">
                       <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
                         <div className="flex min-w-0 items-center gap-2">
@@ -320,7 +325,7 @@ function AIInsightsContent() {
                             item.in_cv ? "bg-accent" : "bg-ink-secondary/45"
                           }`}
                           style={{
-                            width: `${Math.min(100, Math.max(4, Math.round((item.demand_count / maxMarket) * 100)))}%`,
+                            width: `${item.demand_count > 0 ? Math.min(100, Math.max(4, Math.round((item.demand_count / maxMarket) * 100))) : 0}%`,
                           }}
                         />
                       </div>

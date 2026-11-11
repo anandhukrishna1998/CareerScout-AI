@@ -56,6 +56,7 @@ function CVManagerContent() {
   const loadSeqRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const busyCvIdsRef = useRef<Set<number>>(new Set());
+  const uploadingRef = useRef(false);
 
   const [cvs, setCvs] = useState<CVItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -132,7 +133,8 @@ function CVManagerContent() {
   }, [loadCVs]);
 
   const handleFileUpload = async (file: File) => {
-    if (uploading) return;
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
     setActionError("");
     setUploading(true);
     try {
@@ -149,6 +151,7 @@ function CVManagerContent() {
       setActionError(message);
       pushToast(message, "error");
     } finally {
+      uploadingRef.current = false;
       if (mountedRef.current) {
         setUploading(false);
       }
@@ -157,7 +160,7 @@ function CVManagerContent() {
 
   const handlePasteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (uploading) return;
+    if (uploadingRef.current) return;
     const trimmed = pasteText.trim();
     if (!trimmed) {
       const message = "Paste resume text first (at least 15 characters).";
@@ -171,6 +174,7 @@ function CVManagerContent() {
       pushToast(message, "error");
       return;
     }
+    uploadingRef.current = true;
     setActionError("");
     setUploading(true);
     try {
@@ -193,6 +197,7 @@ function CVManagerContent() {
       setActionError(message);
       pushToast(message, "error");
     } finally {
+      uploadingRef.current = false;
       if (mountedRef.current) {
         setUploading(false);
       }
@@ -200,7 +205,7 @@ function CVManagerContent() {
   };
 
   const handleSetPrimary = async (id: number) => {
-    if (busyCvIdsRef.current.has(id)) return;
+    if (busyCvIdsRef.current.has(id) || uploadingRef.current) return;
     setCvBusy(id, true);
     try {
       await apiFetch(`/cvs/${id}/primary`, { method: "POST" });
@@ -233,7 +238,7 @@ function CVManagerContent() {
   };
 
   const handleDelete = async (id: number) => {
-    if (busyCvIdsRef.current.has(id)) return;
+    if (busyCvIdsRef.current.has(id) || uploadingRef.current) return;
     setCvBusy(id, true);
     try {
       await apiFetch(`/cvs/${id}`, { method: "DELETE" });
@@ -252,7 +257,7 @@ function CVManagerContent() {
   };
 
   const handleSaveParsedEdits = async (id: number) => {
-    if (busyCvIdsRef.current.has(id)) return;
+    if (busyCvIdsRef.current.has(id) || uploadingRef.current) return;
     setCvBusy(id, true);
     try {
       const skills = editSkills
@@ -321,17 +326,21 @@ function CVManagerContent() {
             e.preventDefault();
             setIsDragging(true);
           }}
-          onDragLeave={() => setIsDragging(false)}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setIsDragging(false);
+            }
+          }}
           onDrop={(e) => {
             e.preventDefault();
             setIsDragging(false);
-            if (uploading) return;
+            if (uploadingRef.current) return;
             const dropped = e.dataTransfer?.files?.[0] || null;
             if (dropped) {
               void handleFileUpload(dropped);
             }
           }}
-          className={`rounded-2xl border border-dashed p-5 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2 focus-within:ring-offset-surface sm:p-6 ${
+          className={`rounded-2xl border border-dashed p-5 transition sm:p-6 ${
             isDragging ? "border-accent bg-accent-soft/40" : "border-input bg-subtle/60"
           }`}
         >
@@ -518,10 +527,11 @@ function CVManagerContent() {
                     <div className="flex flex-wrap items-center gap-2">
                       {!cv.is_primary && (
                         <Button
+                          type="button"
                           variant="primary"
                           size="sm"
                           loading={isBusy}
-                          disabled={isBusy}
+                          disabled={isBusy || uploading}
                           onClick={() => handleSetPrimary(cv.id)}
                           className="min-h-[44px] sm:min-h-[36px]"
                         >
@@ -529,6 +539,7 @@ function CVManagerContent() {
                         </Button>
                       )}
                       <Button
+                        type="button"
                         variant="secondary"
                         size="sm"
                         disabled={isBusy}
@@ -538,6 +549,7 @@ function CVManagerContent() {
                         Download
                       </Button>
                       <Button
+                        type="button"
                         variant="secondary"
                         size="sm"
                         disabled={isBusy}
@@ -552,10 +564,11 @@ function CVManagerContent() {
                         Edit Skills
                       </Button>
                       <Button
+                        type="button"
                         variant="danger"
                         size="sm"
                         loading={isBusy}
-                        disabled={isBusy}
+                        disabled={isBusy || uploading}
                         onClick={() => handleDelete(cv.id)}
                         className="min-h-[44px] sm:min-h-[36px]"
                       >
@@ -565,7 +578,13 @@ function CVManagerContent() {
                   </div>
 
                   {editingId === cv.id ? (
-                    <div className="mt-4 space-y-3 border-t border-hairline pt-4">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void handleSaveParsedEdits(cv.id);
+                      }}
+                      className="mt-4 space-y-3 border-t border-hairline pt-4"
+                    >
                       <div>
                         <label
                           htmlFor={summaryInputId}
@@ -575,7 +594,7 @@ function CVManagerContent() {
                         </label>
                         <input
                           id={summaryInputId}
-                          disabled={isBusy}
+                          disabled={isBusy || uploading}
                           value={editSummary}
                           onChange={(e) => setEditSummary(e.target.value)}
                           className="input-field"
@@ -591,7 +610,7 @@ function CVManagerContent() {
                           </label>
                           <input
                             id={skillsInputId}
-                            disabled={isBusy}
+                            disabled={isBusy || uploading}
                             value={editSkills}
                             onChange={(e) => setEditSkills(e.target.value)}
                             className="input-field"
@@ -608,8 +627,9 @@ function CVManagerContent() {
                             id={yearsInputId}
                             type="number"
                             min={0}
-                            max={45}
-                            disabled={isBusy}
+                            max={50}
+                            step={1}
+                            disabled={isBusy || uploading}
                             value={editYears}
                             onChange={(e) => setEditYears(Number(e.target.value))}
                             className="input-field font-mono tabular-nums"
@@ -618,16 +638,17 @@ function CVManagerContent() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button
+                          type="submit"
                           variant="primary"
                           size="sm"
                           loading={isBusy}
-                          disabled={isBusy}
-                          onClick={() => handleSaveParsedEdits(cv.id)}
+                          disabled={isBusy || uploading}
                           className="min-h-[44px] sm:min-h-[36px]"
                         >
                           Save &amp; Re-score
                         </Button>
                         <Button
+                          type="button"
                           variant="secondary"
                           size="sm"
                           disabled={isBusy}
@@ -637,7 +658,7 @@ function CVManagerContent() {
                           Cancel
                         </Button>
                       </div>
-                    </div>
+                    </form>
                   ) : (
                     <>
                       {cv.parsed.summary && (

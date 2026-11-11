@@ -11,13 +11,23 @@ import { apiFetch } from "@/lib/api";
 import type { EmailLog, EmailSettings } from "@/lib/types";
 import { useAuthStore } from "@/store/auth-store";
 
+function formatDeliveryTimestamp(raw?: string | null): string {
+  if (!raw) return "—";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
+}
+
 function EmailSettingsContent() {
   const uid = useId();
   const { pushToast } = useToast();
-  const { accessToken } = useAuthStore();
+  const pushToastRef = useRef(pushToast);
+  pushToastRef.current = pushToast;
+  const { user } = useAuthStore();
+  const userId = user?.id ?? null;
   const mountedRef = useRef(true);
   const loadSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const actionInFlightRef = useRef(false);
 
   const [settings, setSettings] = useState<EmailSettings | null>(null);
   const [logs, setLogs] = useState<EmailLog[]>([]);
@@ -60,21 +70,22 @@ function EmailSettingsContent() {
       const message = err instanceof Error ? err.message : "Could not load email settings";
       setSettings(null);
       setError(message);
-      pushToast(message, "error");
+      pushToastRef.current(message, "error");
     } finally {
       if (mountedRef.current && seq === loadSeqRef.current) {
         setLoading(false);
       }
     }
-  }, [pushToast]);
+  }, []);
 
   useEffect(() => {
     void loadAll();
-  }, [loadAll, accessToken]);
+  }, [loadAll, userId]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!settings || saving) return;
+    if (!settings || saving || sendingTest || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setSaving(true);
     try {
       const updated = await apiFetch<EmailSettings>("/email-settings", {
@@ -83,14 +94,20 @@ function EmailSettingsContent() {
       });
       if (!mountedRef.current) return;
       setSettings(updated);
-      const prev = await apiFetch<{ html: string }>("/email-settings/preview");
-      if (!mountedRef.current) return;
-      setPreviewHtml(prev?.html ?? "");
       pushToast("Email digest settings saved!", "success");
+      try {
+        const prev = await apiFetch<{ html: string }>("/email-settings/preview");
+        if (!mountedRef.current) return;
+        setPreviewHtml(prev?.html ?? "");
+      } catch {
+        if (!mountedRef.current) return;
+        pushToast("Settings saved, but preview refresh failed.", "info");
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       pushToast(err instanceof Error ? err.message : "Failed to save settings", "error");
     } finally {
+      actionInFlightRef.current = false;
       if (mountedRef.current) {
         setSaving(false);
       }
@@ -98,7 +115,8 @@ function EmailSettingsContent() {
   };
 
   const handleSendTest = async () => {
-    if (sendingTest || !settings) return;
+    if (sendingTest || saving || !settings || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setSendingTest(true);
     try {
       const res = await apiFetch<{
@@ -113,13 +131,18 @@ function EmailSettingsContent() {
         `Digest ${res.status} (${res.job_count} jobs via ${res.provider})`,
         res.status === "failed" ? "error" : "success",
       );
-      const lRes = await apiFetch<{ items: EmailLog[] }>("/email-settings/logs");
-      if (!mountedRef.current) return;
-      setLogs(Array.isArray(lRes?.items) ? lRes.items : []);
+      try {
+        const lRes = await apiFetch<{ items: EmailLog[] }>("/email-settings/logs");
+        if (!mountedRef.current) return;
+        setLogs(Array.isArray(lRes?.items) ? lRes.items : []);
+      } catch {
+        // Non-fatal: test digest succeeded even if log refresh fails
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       pushToast(err instanceof Error ? err.message : "Test digest failed", "error");
     } finally {
+      actionInFlightRef.current = false;
       if (mountedRef.current) {
         setSendingTest(false);
       }
@@ -155,10 +178,11 @@ function EmailSettingsContent() {
 
         {settings && !error && (
           <Button
+            type="button"
             variant="primary"
             size="md"
             loading={sendingTest}
-            disabled={loading || sendingTest}
+            disabled={loading || saving || sendingTest}
             onClick={handleSendTest}
             className="min-h-[44px]"
           >
@@ -186,13 +210,11 @@ function EmailSettingsContent() {
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <Surface variant="elevated" radius="2xl" className="min-w-0 p-5 sm:p-6">
               <form onSubmit={handleSave} className="space-y-4">
-                <div className="flex min-h-[44px] items-center justify-between gap-4 border-b border-hairline pb-3">
-                  <label
-                    htmlFor={digestEnabledId}
-                    className="cursor-pointer text-sm font-medium text-ink"
-                  >
-                    Enable Daily Job Digest
-                  </label>
+                <label
+                  htmlFor={digestEnabledId}
+                  className="flex min-h-[44px] cursor-pointer items-center justify-between gap-4 border-b border-hairline pb-3 text-sm font-medium text-ink"
+                >
+                  <span>Enable Daily Job Digest</span>
                   <input
                     id={digestEnabledId}
                     type="checkbox"
@@ -200,7 +222,7 @@ function EmailSettingsContent() {
                     onChange={(e) => setSettings({ ...settings, digest_enabled: e.target.checked })}
                     className="h-5 w-5 cursor-pointer rounded border-input accent-[rgb(var(--accent))]"
                   />
-                </div>
+                </label>
 
                 <div>
                   <label
@@ -346,7 +368,7 @@ function EmailSettingsContent() {
                   variant="primary"
                   size="md"
                   loading={saving}
-                  disabled={saving}
+                  disabled={saving || sendingTest}
                   className="min-h-[44px] w-full"
                 >
                   {saving ? "Saving..." : "Save Digest Preferences"}
@@ -417,7 +439,7 @@ function EmailSettingsContent() {
                           </Badge>
                         </td>
                         <td className="py-2.5 font-mono tabular-nums text-muted">
-                          {new Date(l.sent_at).toLocaleString()}
+                          {formatDeliveryTimestamp(l.sent_at)}
                         </td>
                       </tr>
                     ))}

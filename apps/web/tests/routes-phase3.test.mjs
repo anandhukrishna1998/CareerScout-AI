@@ -227,6 +227,7 @@ class MockApiError extends Error {
 }
 
 function createBaseMocks(overrides = {}) {
+  const pushToast = () => {};
   return {
     "next/link": {
       __esModule: true,
@@ -260,7 +261,7 @@ function createBaseMocks(overrides = {}) {
       }),
     },
     "@/components/providers": {
-      useToast: () => ({ pushToast: () => {} }),
+      useToast: () => ({ pushToast }),
     },
     ...overrides,
   };
@@ -399,7 +400,7 @@ test("All 7 Task 7 route files and emailer.py remove Sidebar, banned tokens, dar
   assert.match(emailerSrc, /async def dispatch_email_digest\(/);
 });
 
-test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, binds labels, wraps filenames, and shows error+Retry", async () => {
+test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, validates inline form & paste, downloads, wraps filenames, and shows error/empty states", async () => {
   let failList = true;
   let cvItems = [
     makeCv({ id: 1, is_primary: true }),
@@ -414,13 +415,16 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   const primaryDeferred = createDeferred();
   const deleteDeferred = createDeferred();
   const apiCalls = [];
+  const downloadCalls = [];
 
   const harness = createInteractiveHarness("app/cvs/page.tsx", (reactMock) =>
     createBaseMocks({
       react: reactMock,
       "@/lib/api": {
         ApiError: MockApiError,
-        downloadWithAuth: async () => {},
+        downloadWithAuth: async (pathName, filename) => {
+          downloadCalls.push({ pathName, filename });
+        },
         apiFetch: async (pathName, opts) => {
           apiCalls.push({ pathName, opts });
           if (pathName === "/cvs") {
@@ -436,8 +440,10 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
           if (pathName === "/cvs/2/primary") {
             return primaryDeferred.promise;
           }
-          if (pathName === "/cvs/2") {
-            return deleteDeferred.promise;
+          if (pathName === "/cvs/1" || pathName === "/cvs/2") {
+            if (opts?.method === "DELETE") {
+              return deleteDeferred.promise;
+            }
           }
           if (pathName === "/cvs/1/parsed") {
             return { status: "updated" };
@@ -468,7 +474,7 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   tree = harness.render();
   assert.equal(harness.findAll(tree, (el) => el.props?.role === "alert").length, 0);
 
-  // P0 Keyboard upload fix: real button trigger + sr-only tabIndex=-1 file input
+  // P0 Keyboard upload fix: real button trigger + sr-only tabIndex=-1 file input + single crisp focus ring
   const fileInput = harness.findAll(
     tree,
     (el) => el.type === "input" && el.props?.type === "file",
@@ -477,6 +483,17 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   assert.match(fileInput.props.className, /\bsr-only\b/);
   assert.doesNotMatch(fileInput.props.className, /\bhidden\b/);
   assert.equal(fileInput.props.tabIndex, -1);
+
+  const dropzone = harness.findAll(
+    tree,
+    (el) => typeof el.props?.className === "string" && el.props.className.includes("border-dashed"),
+  )[0];
+  assert.ok(dropzone);
+  assert.doesNotMatch(
+    dropzone.props.className,
+    /focus-within:ring-2/,
+    "Outer dropzone must not stack a duplicate focus-within ring around Choose File button",
+  );
 
   const uploadBtn = harness.findAll(
     tree,
@@ -522,7 +539,25 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   assert.match(cvFilenameH2.props.className, /\bbreak-words\b/);
   assert.match(cvFilenameH2.props.className, /\bmin-w-0\b/);
 
-  // Open paste mode & start upload -> paste inputs must disable while uploading is in flight
+  // Download button calls downloadWithAuth with CV path & filename
+  const downloadBtn1 = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el) === "Download",
+  )[0];
+  await downloadBtn1.props.onClick();
+  assert.deepEqual(downloadCalls[0], {
+    pathName: "/cvs/1/download",
+    filename: cvItems[0].filename,
+  });
+
+  // Open Edit Skills on CV #1 and Paste form before starting upload to verify concurrent locks
+  const editSkillsBeforeUpload = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el) === "Edit Skills",
+  )[0];
+  editSkillsBeforeUpload.props.onClick();
+  tree = harness.render();
+
   const pasteToggle = harness.findAll(
     tree,
     (el) => el.type === "button" && harness.textOf(el).includes("Paste CV Text"),
@@ -536,24 +571,52 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   assert.equal(fileTarget.value, "", "File input value must reset after picking a file");
   tree = harness.render();
 
-  const pasteInputsDuringUpload = harness.findAll(
-    tree,
-    (el) => (el.type === "input" && el.props?.type !== "file") || el.type === "textarea",
+  const pasteTextareaDuringUpload = harness.findAll(tree, (el) => el.type === "textarea")[0];
+  assert.equal(
+    pasteTextareaDuringUpload.props.disabled,
+    true,
+    "Paste textarea must be disabled while upload is in flight",
   );
-  assert.ok(pasteInputsDuringUpload.length >= 2);
-  for (const ctrl of pasteInputsDuringUpload) {
-    assert.equal(
-      ctrl.props.disabled,
-      true,
-      "Paste inputs must be disabled while upload is in flight",
-    );
-  }
+
+  // Card mutation buttons & inline Save must lock while upload is in flight
+  const setPrimaryDuringUpload = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Set Primary"),
+  )[0];
+  const deleteDuringUpload = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el) === "Delete",
+  )[1];
+  const saveRescoreDuringUpload = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Save & Re-score"),
+  )[0];
+  assert.equal(setPrimaryDuringUpload.props.disabled, true);
+  assert.equal(deleteDuringUpload.props.disabled, true);
+  assert.equal(saveRescoreDuringUpload.props.disabled, true);
+
+  await setPrimaryDuringUpload.props.onClick();
+  await deleteDuringUpload.props.onClick();
+  const editFormDuringUpload = harness.findAll(tree, (el) => el.type === "form")[1];
+  assert.ok(editFormDuringUpload, "Inline skill editor must render as a <form>");
+  await editFormDuringUpload.props.onSubmit({ preventDefault: () => {} });
+  assert.equal(
+    apiCalls.some((c) => c.pathName === "/cvs/2/primary"),
+    false,
+    "Set Primary must not dispatch while uploading",
+  );
+  assert.equal(
+    apiCalls.some((c) => c.pathName === "/cvs/1/parsed"),
+    false,
+    "PATCH /parsed must not dispatch while uploading",
+  );
 
   uploadDeferred.resolve({ id: 3 });
   await uploadPromise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
   tree = harness.render();
 
-  // Verify label htmlFor bindings in paste mode
+  // Verify label htmlFor bindings in paste + edit modes
   for (const lbl of harness.findAll(tree, (el) => el.type === "label")) {
     assert.ok(lbl.props?.htmlFor, "Every <label> on /cvs must specify htmlFor");
     assert.ok(
@@ -561,6 +624,45 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
       `Expected control with id="${lbl.props.htmlFor}"`,
     );
   }
+
+  // Paste validation: < 15 chars shows inline alert without API call, then >= 15 submits /cvs/from-text
+  const pasteTextarea = harness.findAll(tree, (el) => el.type === "textarea")[0];
+  assert.equal(
+    pasteTextarea.props.disabled,
+    false,
+    "Paste textarea must unlock after upload settles",
+  );
+  pasteTextarea.props.onChange({ target: { value: "short cv" } });
+  tree = harness.render();
+  const pasteForm = harness.findAll(tree, (el) => el.type === "form")[0];
+  await pasteForm.props.onSubmit({ preventDefault: () => {} });
+  tree = harness.render();
+  assert.equal(
+    apiCalls.some((c) => c.pathName === "/cvs/from-text"),
+    false,
+    "Paste text under 15 characters must fail inline without calling API",
+  );
+  assert.match(
+    harness.textOf(harness.findAll(tree, (el) => el.props?.role === "alert")[0]),
+    /at least 15 characters/,
+  );
+
+  harness
+    .findAll(tree, (el) => el.type === "textarea")[0]
+    .props.onChange({
+      target: { value: "Staff Python AI engineer with 7 years distributed systems experience" },
+    });
+  tree = harness.render();
+  await harness
+    .findAll(tree, (el) => el.type === "form")[0]
+    .props.onSubmit({
+      preventDefault: () => {},
+    });
+  tree = harness.render();
+  assert.ok(
+    apiCalls.some((c) => c.pathName === "/cvs/from-text" && c.opts?.method === "POST"),
+    "Valid pasted CV text must submit POST /cvs/from-text",
+  );
 
   // Per-CV busy locking: click Set Primary on CV #2 locks CV #2 while leaving CV #1 interactive
   const setPrimaryBtn = harness.findAll(
@@ -599,26 +701,27 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   await primaryPromise;
   tree = harness.render();
 
-  // Edit Skills on CV #1: verify bound labels and PATCH /cvs/1/parsed
-  const editSkillsBtn = harness.findAll(
+  // Edit Skills on CV #1: verifies <form> with type="submit" + min=0/max=50/step=1 + PATCH /cvs/1/parsed
+  const inlineYearsInput = harness.findAll(
     tree,
-    (el) => el.type === "button" && harness.textOf(el) === "Edit Skills",
+    (el) => el.type === "input" && el.props?.type === "number",
   )[0];
-  editSkillsBtn.props.onClick();
-  tree = harness.render();
+  assert.equal(inlineYearsInput.props.min, 0);
+  assert.equal(inlineYearsInput.props.max, 50);
+  assert.equal(inlineYearsInput.props.step, 1);
 
-  for (const lbl of harness.findAll(tree, (el) => el.type === "label")) {
-    assert.ok(lbl.props?.htmlFor);
-    assert.ok(harness.findAll(tree, (el) => el.props?.id === lbl.props.htmlFor)[0]);
-  }
   const saveRescoreBtn = harness.findAll(
     tree,
     (el) => el.type === "button" && harness.textOf(el).includes("Save & Re-score"),
   )[0];
-  await saveRescoreBtn.props.onClick();
+  assert.equal(saveRescoreBtn.props.type, "submit");
+  const editForm = harness.findAll(tree, (el) => el.type === "form")[0];
+  await editForm.props.onSubmit({ preventDefault: () => {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  tree = harness.render();
   assert.ok(apiCalls.some((c) => c.pathName === "/cvs/1/parsed" && c.opts?.method === "PATCH"));
 
-  // Delete CV #2
+  // Delete CV #2 then CV #1 -> empty state renders cleanly
   const deleteBtn2 = harness.findAll(
     tree,
     (el) => el.type === "button" && harness.textOf(el) === "Delete",
@@ -630,11 +733,19 @@ test("CV Manager (/cvs) fixes P0 keyboard upload, locks paste & per-CV actions, 
   tree = harness.render();
   assert.equal(harness.findAll(tree, (el) => el.type === "article").length, 1);
 
+  cvItems = [];
+  await harness
+    .findAll(tree, (el) => el.type === "button" && harness.textOf(el) === "Delete")[0]
+    .props.onClick();
+  tree = harness.render();
+  assert.match(harness.textOf(tree), /No CVs uploaded yet/);
+
   harness.unmount();
 });
 
-test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inline SVG arrows, bar modules, and error+Retry", async () => {
+test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inline SVG arrows, bar modules, empty state, and error+Retry", async () => {
   let failInsights = true;
+  let emptyInsights = false;
   const insightsPayload = {
     ats_readiness_score: 84,
     jobs_analyzed: 42,
@@ -642,6 +753,7 @@ test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inlin
     top_missing_skills: [
       { skill: "Kubernetes", demand_count: 18, impact: 11 },
       { skill: "Terraform", demand_count: 10, impact: 6 },
+      { skill: "Go", demand_count: 0, impact: 0 },
     ],
     top_strengths: [
       { skill: "Python", matched_count: 35 },
@@ -650,6 +762,7 @@ test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inlin
     market_skill_demand: [
       { skill: "Python", demand_count: 38, in_cv: true },
       { skill: "Kubernetes", demand_count: 18, in_cv: false },
+      { skill: "Go", demand_count: 0, in_cv: false },
     ],
     recommendations: [
       "Add Kubernetes deployment metrics to your primary CV summary.",
@@ -665,6 +778,7 @@ test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inlin
         apiFetch: async (pathName) => {
           if (pathName === "/matches/insights") {
             if (failInsights) throw new Error("Insights engine offline");
+            if (emptyInsights) return null;
             return insightsPayload;
           }
           return {};
@@ -698,6 +812,12 @@ test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inlin
   assert.match(text, /Kubernetes/);
   assert.match(text, /\+11% potential boost/);
 
+  const zeroDemandBars = harness.findAll(
+    tree,
+    (el) => el.type === "div" && el.props?.style?.width === "0%",
+  );
+  assert.equal(zeroDemandBars.length, 2, "Zero-demand skills should render 0% bar width");
+
   const meters = harness.findAll(tree, (el) => el.props?.role === "meter");
   assert.equal(meters.length, 1);
   assert.equal(meters[0].props["aria-valuenow"], 84);
@@ -708,6 +828,26 @@ test("AI Insights (/ai-insights) renders asymmetric Bento pair, ScoreRing, inlin
   )[0];
   assert.ok(coachLink);
   assert.doesNotMatch(harness.textOf(coachLink), /→/);
+
+  // Empty state renders SectionState guidance + /cvs link
+  emptyInsights = true;
+  const emptyHarness = createInteractiveHarness("app/ai-insights/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "@/lib/api": {
+        ApiError: MockApiError,
+        apiFetch: async () => null,
+      },
+    }),
+  );
+  emptyHarness.render();
+  await emptyHarness.flushEffects();
+  const emptyTree = emptyHarness.render();
+  assert.match(emptyHarness.textOf(emptyTree), /No insights available yet/);
+  assert.ok(
+    emptyHarness.findAll(emptyTree, (el) => el.type === "a" && el.props?.href === "/cvs")[0],
+  );
+  emptyHarness.unmount();
 
   harness.unmount();
 });
@@ -723,8 +863,9 @@ test("AI Chat (/ai-chat) renders centered Botanical studio wrapper around AuthGa
   assert.doesNotMatch(html, /text-white/);
 });
 
-test("Analytics (/analytics) renders hairline region strip, distribution bars, Funnel & Work Mode Bento stones, and error+Retry", async () => {
+test("Analytics (/analytics) renders hairline region strip, distribution bars, Funnel & Work Mode Bento stones, empty states, and error+Retry", async () => {
   let failAnalytics = true;
+  let analyticsMode = "full";
   const analyticsPayload = {
     kpis: {
       total_jobs: 164,
@@ -768,6 +909,17 @@ test("Analytics (/analytics) renders hairline region strip, distribution bars, F
         ApiError: MockApiError,
         apiFetch: async () => {
           if (failAnalytics) throw new Error("Analytics warehouse down");
+          if (analyticsMode === "null") return null;
+          if (analyticsMode === "empty-arrays") {
+            return {
+              ...analyticsPayload,
+              score_distribution: [],
+              jobs_by_source: [],
+              jobs_by_remote_mode: [],
+              application_funnel: [],
+              top_market_skills: [],
+            };
+          }
           return analyticsPayload;
         },
       },
@@ -811,10 +963,56 @@ test("Analytics (/analytics) renders hairline region strip, distribution bars, F
     "Funnel and Work Mode stones should use --bg-subtle inner wells",
   );
 
+  // Empty array breakdown fallbacks + null overview empty state
+  analyticsMode = "empty-arrays";
+  const emptyBreakdownHarness = createInteractiveHarness("app/analytics/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "@/lib/api": {
+        ApiError: MockApiError,
+        apiFetch: async () => ({
+          ...analyticsPayload,
+          jobs_by_remote_mode: [],
+          application_funnel: [],
+        }),
+      },
+    }),
+  );
+  emptyBreakdownHarness.render();
+  await emptyBreakdownHarness.flushEffects();
+  const emptyBreakdownTree = emptyBreakdownHarness.render();
+  assert.match(
+    emptyBreakdownHarness.textOf(emptyBreakdownTree),
+    /No work mode breakdown available yet/,
+  );
+  assert.match(
+    emptyBreakdownHarness.textOf(emptyBreakdownTree),
+    /No application pipeline stages recorded yet/,
+  );
+  emptyBreakdownHarness.unmount();
+
+  const nullHarness = createInteractiveHarness("app/analytics/page.tsx", (reactMock) =>
+    createBaseMocks({
+      react: reactMock,
+      "@/lib/api": {
+        ApiError: MockApiError,
+        apiFetch: async () => null,
+      },
+    }),
+  );
+  nullHarness.render();
+  await nullHarness.flushEffects();
+  const nullTree = nullHarness.render();
+  assert.match(nullHarness.textOf(nullTree), /No analytics data yet/);
+  assert.ok(
+    nullHarness.findAll(nullTree, (el) => el.type === "a" && el.props?.href === "/jobs")[0],
+  );
+  nullHarness.unmount();
+
   harness.unmount();
 });
 
-test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, hairline status strip, sources, and runs table", async () => {
+test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, hairline status strip, sources, and runs table with error_message", async () => {
   let mode = "forbidden";
   const apiCalls = [];
   const adminPayload = {
@@ -827,7 +1025,7 @@ test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, 
     metrics: {
       total_jobs: 210,
       total_users: 14,
-      recent_failures: 0,
+      recent_failures: 1,
     },
     sources: [
       { id: "gh", name: "Greenhouse", type: "ats", requires_key: false, configured: true },
@@ -844,6 +1042,17 @@ test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, 
         duration_ms: 820,
         error_message: "",
         started_at: "2026-11-11T09:00:00Z",
+      },
+      {
+        id: 2,
+        source: "remoteok",
+        backend: "httpx",
+        status: "failed",
+        jobs_fetched: 0,
+        jobs_upserted: 0,
+        duration_ms: 190,
+        error_message: "429 Too Many Requests",
+        started_at: "not-a-valid-date",
       },
     ],
   };
@@ -913,7 +1122,11 @@ test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, 
   assert.ok(tableWrapper);
   const tableEl = harness.findAll(tree, (el) => el.type === "table")[0];
   assert.ok(tableEl);
-  assert.match(harness.textOf(tree), /820 ms/);
+  const tableText = harness.textOf(tableEl);
+  assert.match(tableText, /820 ms/);
+  assert.match(tableText, /429 Too Many Requests/);
+  assert.doesNotMatch(tableText, /Invalid Date/);
+  assert.match(tableText, /—/);
 
   const scrapeBtn = harness.findAll(
     tree,
@@ -925,13 +1138,20 @@ test("Admin (/admin) surfaces 403 & generic errors via SectionState with Retry, 
   harness.unmount();
 });
 
-test("Email Settings (/email-settings) handles error+Retry, stale cancellation, bound 8 controls, framed iframe, and logs table", async () => {
+test("Email Settings (/email-settings) ignores token refresh wipes, cancels stale loads on account change, isolates preview failures, mutually locks save/test, wraps 44px toggle, and renders logs", async () => {
   let failLoad = true;
+  let failPreviewOnSave = false;
   let slowMode = false;
   let currentToken = "tok-1";
+  let currentUserId = 1;
   const slowDeferred = createDeferred();
+  const putDeferred = createDeferred();
+  const testDeferred = createDeferred();
+  let deferPut = false;
+  let deferTest = false;
   const slowSignals = [];
   const apiCalls = [];
+  const toastEvents = [];
 
   const settingsFixture = {
     digest_enabled: true,
@@ -956,16 +1176,32 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
       error_message: "",
       sent_at: "2026-11-11T08:00:00Z",
     },
+    {
+      id: 2,
+      recipient_email: "backup@example.com",
+      subject: "Daily Top Matches",
+      job_count: 2,
+      status: "simulated",
+      provider: "local_preview",
+      error_message: "",
+      sent_at: "not-a-timestamp",
+    },
   ];
   const previewFixture = "<div>Preview OK</div>";
 
+  const pushToastEvent = (msg, type) => toastEvents.push({ msg, type });
   const harness = createInteractiveHarness("app/email-settings/page.tsx", (reactMock) =>
     createBaseMocks({
       react: reactMock,
+      "@/components/providers": {
+        useToast: () => ({
+          pushToast: pushToastEvent,
+        }),
+      },
       "@/store/auth-store": {
         useAuthStore: () => ({
           user: {
-            id: 1,
+            id: currentUserId,
             email: "ada@example.com",
             full_name: "Ada Lovelace",
             role: "admin",
@@ -993,12 +1229,15 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
             return { items: logsFixture };
           }
           if (pathName === "/email-settings/preview") {
+            if (failPreviewOnSave) throw new Error("Preview renderer busy");
             return { html: previewFixture };
           }
           if (pathName === "/email-settings" && opts?.method === "PUT") {
+            if (deferPut) return putDeferred.promise;
             return JSON.parse(opts.body);
           }
           if (pathName === "/email-settings/test-digest") {
+            if (deferTest) return testDeferred.promise;
             return {
               status: "simulated",
               provider: "local_preview",
@@ -1023,7 +1262,7 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
   );
   assert.match(harness.textOf(alert), /Email settings API offline/);
 
-  // Stale-response cancellation: trigger slow load via Retry, then rotate accessToken to trigger fresh load
+  // Stale-response cancellation: trigger slow load via Retry, then switch user?.id to trigger fresh load
   failLoad = false;
   slowMode = true;
   const retryBtn = harness.findAll(
@@ -1033,7 +1272,7 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
   const slowPromise = retryBtn.props.onClick();
 
   slowMode = false;
-  currentToken = "tok-2";
+  currentUserId = 2;
   harness.render();
   await harness.flushEffects();
   tree = harness.render();
@@ -1041,7 +1280,7 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
   assert.equal(
     slowSignals[0]?.aborted,
     true,
-    "New load must abort previous AbortController signal",
+    "Account change must abort previous AbortController signal",
   );
 
   // Even if stale promise resolves later without honoring AbortSignal, loadSeqRef discards it
@@ -1059,7 +1298,27 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
     "Stale slow response must NOT overwrite fresher loaded settings",
   );
 
-  // Bound labels for all 8 controls
+  // Important #1: accessToken-only rotation MUST NOT trigger reload or wipe unsaved edits
+  const callsBeforeRefresh = apiCalls.filter((c) => c.pathName === "/email-settings").length;
+  emailInputAfterRace.props.onChange({ target: { value: "unsaved-edit@example.com" } });
+  tree = harness.render();
+  currentToken = "tok-refreshed";
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  const callsAfterRefresh = apiCalls.filter((c) => c.pathName === "/email-settings").length;
+  assert.equal(
+    callsAfterRefresh,
+    callsBeforeRefresh,
+    "Silent accessToken rotation must NOT re-fetch /email-settings",
+  );
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "input" && el.props?.type === "email")[0].props.value,
+    "unsaved-edit@example.com",
+    "Silent accessToken rotation must preserve unsaved edits",
+  );
+
+  // Bound labels for all 8 controls + wrapped min-h-[44px] checkbox <label>
   const labels = harness.findAll(tree, (el) => el.type === "label");
   assert.equal(
     labels.length,
@@ -1073,12 +1332,20 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
       `Expected input/select with id="${lbl.props.htmlFor}"`,
     );
   }
-
-  // Accent styling on checkbox and range slider
   const checkbox = harness.findAll(
     tree,
     (el) => el.type === "input" && el.props?.type === "checkbox",
   )[0];
+  const digestToggleLabel = harness.findAll(
+    tree,
+    (el) =>
+      el.type === "label" &&
+      el.props?.htmlFor === checkbox.props.id &&
+      harness.findAll(el, (child) => child.props?.id === checkbox.props.id).length === 1,
+  )[0];
+  assert.ok(digestToggleLabel, "Digest checkbox must sit inside a full clickable <label>");
+  assert.match(digestToggleLabel.props.className, /min-h-\[44px\]/);
+
   const rangeInput = harness.findAll(
     tree,
     (el) => el.type === "input" && el.props?.type === "range",
@@ -1086,7 +1353,7 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
   assert.match(checkbox.props.className, /accent-\[rgb\(var\(--accent\)\)\]/);
   assert.match(rangeInput.props.className, /accent-\[rgb\(var\(--accent\)\)\]/);
 
-  // Iframe preview wrapper
+  // Iframe preview wrapper + rendered delivery log table cells
   const iframe = harness.findAll(tree, (el) => el.type === "iframe")[0];
   assert.ok(iframe);
   assert.equal(iframe.props.title, "Email digest preview");
@@ -1106,16 +1373,97 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
     "Preview iframe must sit in crisp themed bg-subtle border-hairline rounded-2xl wrapper",
   );
 
-  // Save & Test digest actions
-  const form = harness.findAll(tree, (el) => el.type === "form")[0];
-  await form.props.onSubmit({ preventDefault: () => {} });
-  assert.ok(apiCalls.some((c) => c.pathName === "/email-settings" && c.opts?.method === "PUT"));
+  const logsTable = harness.findAll(tree, (el) => el.type === "table")[0];
+  assert.ok(logsTable, "Delivery logs table must render");
+  const logsText = harness.textOf(logsTable);
+  assert.match(logsText, /ada@example\.com/);
+  assert.match(logsText, /5/);
+  assert.match(logsText, /local_preview/);
+  assert.match(logsText, /sent/);
+  assert.doesNotMatch(logsText, /Invalid Date/);
+  assert.match(logsText, /—/);
 
-  const testBtn = harness.findAll(
+  // Mutual locking while Save (PUT) is in flight + isolated preview failure toast
+  deferPut = true;
+  failPreviewOnSave = true;
+  toastEvents.length = 0;
+  const savePromise = harness
+    .findAll(tree, (el) => el.type === "form")[0]
+    .props.onSubmit({ preventDefault: () => {} });
+  tree = harness.render();
+
+  const testBtnDuringSave = harness.findAll(
     tree,
     (el) => el.type === "button" && harness.textOf(el).includes("Send Test Digest Now"),
   )[0];
-  await testBtn.props.onClick();
+  assert.equal(
+    testBtnDuringSave.props.disabled,
+    true,
+    "Send Test Digest button must be disabled while save is in flight",
+  );
+  await testBtnDuringSave.props.onClick();
+  assert.equal(
+    apiCalls.some((c) => c.pathName === "/email-settings/test-digest"),
+    false,
+    "Send Test Digest must NOT dispatch while save is in flight",
+  );
+
+  putDeferred.resolve({ ...settingsFixture, recipient_email: "unsaved-edit@example.com" });
+  await savePromise;
+  tree = harness.render();
+  assert.ok(
+    toastEvents.some((t) => t.type === "success" && t.msg.includes("saved")),
+    "Save success toast must still fire when preview refresh fails",
+  );
+  assert.ok(
+    toastEvents.some((t) => t.type === "info" && t.msg.includes("preview refresh failed")),
+    "Preview refresh failure must emit a distinct non-save-error info toast",
+  );
+  assert.equal(
+    toastEvents.some((t) => t.type === "error"),
+    false,
+    "Preview failure must NOT show 'Failed to save settings' error toast",
+  );
+
+  // Mutual locking while Test Digest (POST) is in flight
+  deferPut = false;
+  deferTest = true;
+  const putCountBeforeTest = apiCalls.filter(
+    (c) => c.pathName === "/email-settings" && c.opts?.method === "PUT",
+  ).length;
+  const testPromise = harness
+    .findAll(
+      tree,
+      (el) => el.type === "button" && harness.textOf(el).includes("Send Test Digest Now"),
+    )[0]
+    .props.onClick();
+  tree = harness.render();
+
+  const saveBtnDuringTest = harness.findAll(
+    tree,
+    (el) => el.type === "button" && harness.textOf(el).includes("Save Digest Preferences"),
+  )[0];
+  assert.equal(
+    saveBtnDuringTest.props.disabled,
+    true,
+    "Save Digest Preferences button must be disabled while test digest is dispatching",
+  );
+  await harness
+    .findAll(tree, (el) => el.type === "form")[0]
+    .props.onSubmit({ preventDefault: () => {} });
+  assert.equal(
+    apiCalls.filter((c) => c.pathName === "/email-settings" && c.opts?.method === "PUT").length,
+    putCountBeforeTest,
+    "PUT /email-settings must NOT dispatch while test digest is in flight",
+  );
+
+  testDeferred.resolve({
+    status: "simulated",
+    provider: "local_preview",
+    job_count: 5,
+    preview_html: "<div>Test Digest HTML</div>",
+  });
+  await testPromise;
   tree = harness.render();
   assert.ok(
     apiCalls.some((c) => c.pathName === "/email-settings/test-digest" && c.opts?.method === "POST"),
@@ -1128,8 +1476,13 @@ test("Email Settings (/email-settings) handles error+Retry, stale cancellation, 
   harness.unmount();
 });
 
-test("Profile Settings (/profile-settings) handles error+Retry, binds all labels including passwords, 44px visa target, and saves profile/password", async () => {
+test("Profile Settings (/profile-settings) ignores token refresh wipes, cancels stale account swaps, binds all labels + autoComplete, syncs fullName, and saves profile/password", async () => {
   let failProfile = true;
+  let slowMode = false;
+  let currentToken = "tok-1";
+  let currentUserId = 1;
+  const slowDeferred = createDeferred();
+  const slowSignals = [];
   const updatedUsers = [];
   const apiCalls = [];
 
@@ -1162,13 +1515,13 @@ test("Profile Settings (/profile-settings) handles error+Retry, binds all labels
       "@/store/auth-store": {
         useAuthStore: () => ({
           user: {
-            id: 1,
+            id: currentUserId,
             email: "ada@example.com",
             full_name: "Ada Lovelace",
             role: "user",
             onboarding_completed: true,
           },
-          accessToken: "tok",
+          accessToken: currentToken,
           hydrated: true,
           setSession: () => {},
           updateUser: (patch) => updatedUsers.push(patch),
@@ -1179,11 +1532,20 @@ test("Profile Settings (/profile-settings) handles error+Retry, binds all labels
         apiFetch: async (pathName, opts) => {
           apiCalls.push({ pathName, opts });
           if (pathName === "/profile" && (!opts?.method || opts.method === "GET")) {
+            if (slowMode) {
+              slowSignals.push(opts?.signal);
+              return slowDeferred.promise;
+            }
             if (failProfile) throw new Error("Profile service unavailable");
             return profileFixture;
           }
           if (pathName === "/profile" && opts?.method === "PUT") {
-            return { ...profileFixture, ...JSON.parse(opts.body) };
+            const parsedBody = JSON.parse(opts.body);
+            return {
+              ...profileFixture,
+              ...parsedBody,
+              full_name: String(parsedBody.full_name || "").trim() || "Ada Lovelace",
+            };
           }
           if (pathName === "/auth/change-password") {
             return { ok: true };
@@ -1203,16 +1565,54 @@ test("Profile Settings (/profile-settings) handles error+Retry, binds all labels
   assert.match(harness.textOf(alert), /Profile service unavailable/);
   assert.equal(harness.findAll(tree, (el) => el.type === "form").length, 0);
 
+  // Slow retry followed by user.id change aborts previous load and discards stale profile
   failProfile = false;
+  slowMode = true;
   const retryBtn = harness.findAll(
     tree,
     (el) => el.type === "button" && harness.textOf(el).includes("Retry"),
   )[0];
-  await retryBtn.props.onClick();
+  const slowProfilePromise = retryBtn.props.onClick();
+
+  slowMode = false;
+  currentUserId = 2;
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  assert.equal(slowSignals[0]?.aborted, true);
+
+  slowDeferred.resolve({ ...profileFixture, full_name: "Stale Name" });
+  await slowProfilePromise;
   tree = harness.render();
 
   const forms = harness.findAll(tree, (el) => el.type === "form");
   assert.equal(forms.length, 2, "Must render Preferences form and Security password form");
+
+  // Silent accessToken rotation preserves unsaved edits without re-fetching GET /profile
+  const fullNameInput = harness.findAll(tree, (el) => el.type === "input")[0];
+  assert.equal(fullNameInput.props.value, "Ada Lovelace");
+  fullNameInput.props.onChange({ target: { value: "  Ada Unsaved  " } });
+  tree = harness.render();
+
+  const getsBeforeTokenRefresh = apiCalls.filter(
+    (c) => c.pathName === "/profile" && (!c.opts?.method || c.opts.method === "GET"),
+  ).length;
+  currentToken = "tok-2";
+  harness.render();
+  await harness.flushEffects();
+  tree = harness.render();
+  const getsAfterTokenRefresh = apiCalls.filter(
+    (c) => c.pathName === "/profile" && (!c.opts?.method || c.opts.method === "GET"),
+  ).length;
+  assert.equal(
+    getsAfterTokenRefresh,
+    getsBeforeTokenRefresh,
+    "Silent accessToken refresh must NOT re-fetch GET /profile",
+  );
+  assert.equal(
+    harness.findAll(tree, (el) => el.type === "input")[0].props.value,
+    "  Ada Unsaved  ",
+  );
 
   // Every input & select must have a bound <label htmlFor>
   const controls = harness.findAll(
@@ -1240,16 +1640,22 @@ test("Profile Settings (/profile-settings) handles error+Retry, binds all labels
   )[0];
   assert.match(visaLabel.props.className, /min-h-\[44px\]/);
 
-  // Save profile updates auth store
-  await forms[0].props.onSubmit({ preventDefault: () => {} });
+  // Save profile syncs fullName from server response & updates auth store
+  await harness
+    .findAll(tree, (el) => el.type === "form")[0]
+    .props.onSubmit({ preventDefault: () => {} });
+  tree = harness.render();
   assert.ok(apiCalls.some((c) => c.pathName === "/profile" && c.opts?.method === "PUT"));
-  assert.equal(updatedUsers[0].full_name, "Ada Lovelace");
+  assert.equal(updatedUsers[0].full_name, "Ada Unsaved");
+  assert.equal(harness.findAll(tree, (el) => el.type === "input")[0].props.value, "Ada Unsaved");
 
-  // Password validation (<8 chars) shows alert without calling API, then valid password submits
+  // Password validation (<8 chars), autoComplete attrs, and valid submission
   const pwInputs = harness.findAll(
     tree,
     (el) => el.type === "input" && el.props?.type === "password",
   );
+  assert.equal(pwInputs[0].props.autoComplete, "current-password");
+  assert.equal(pwInputs[1].props.autoComplete, "new-password");
   pwInputs[0].props.onChange({ target: { value: "old-pass-123" } });
   pwInputs[1].props.onChange({ target: { value: "short" } });
   tree = harness.render();
@@ -1281,7 +1687,7 @@ test("Profile Settings (/profile-settings) handles error+Retry, binds all labels
   harness.unmount();
 });
 
-test("Python render_digest_html outputs Option 3 Light Mode HTML, escapes XSS, sanitizes apply_url, and preserves dispatch_email_digest", () => {
+test("Python render_digest_html outputs Option 3 Light Mode HTML, escapes XSS, handles None score, sanitizes apply_url, and preserves dispatch_email_digest", () => {
   const pythonExe = findPythonExecutable();
   const script = `
 import asyncio, json, sys
@@ -1305,7 +1711,7 @@ html_out = render_digest_html(
             "title": 'Staff ML Engineer',
             "company": 'Nordic Lab',
             "location": 'Remote',
-            "score": 85,
+            "score": None,
             "apply_url": 'https://jobs.example.com/role?id=42&ref=digest',
             "matched_skills": ['PyTorch'],
             "missing_skills": [],
@@ -1320,12 +1726,13 @@ print(json.dumps({"html": html_out, "empty": empty_out, "sim": list(sim_result)}
   const raw = execFileSync(pythonExe, ["-c", script], { encoding: "utf8" });
   const parsed = JSON.parse(raw);
 
-  // Escaping and URL sanitization
+  // Escaping, None score handling, and URL sanitization
   assert.doesNotMatch(parsed.html, /<script>/i);
   assert.doesNotMatch(parsed.html, /<img\b/i);
   assert.doesNotMatch(parsed.html, /javascript:/i);
   assert.match(parsed.html, /&lt;script&gt;/);
   assert.match(parsed.html, /&lt;img src=x onerror=alert\(1\)&gt;AI Engineer/);
+  assert.match(parsed.html, /0\/100/);
   assert.match(parsed.html, /href="#"/);
   assert.match(parsed.html, /href="https:\/\/jobs\.example\.com\/role\?id=42&amp;ref=digest"/);
 

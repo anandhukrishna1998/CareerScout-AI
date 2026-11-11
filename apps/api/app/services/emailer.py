@@ -33,7 +33,7 @@ def render_digest_html(
         title = html.escape(str(m.get("title", "")), quote=True)
         company = html.escape(str(m.get("company", "")), quote=True)
         location = html.escape(str(m.get("location", "")), quote=True)
-        score = int(m.get("score", 0))
+        score = int(m.get("score") or 0)
         apply_url = html.escape(_sanitize_apply_url(m.get("apply_url")), quote=True)
         strengths = ", ".join(
             html.escape(str(s), quote=True) for s in (m.get("matched_skills") or [])[:4]

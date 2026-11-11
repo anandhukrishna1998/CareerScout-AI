@@ -61,8 +61,14 @@ function AnalyticsContent() {
     void loadAnalytics();
   }, [loadAnalytics]);
 
-  const maxBucket = Math.max(1, ...(data?.score_distribution ?? []).map((b) => b.count));
-  const maxSource = Math.max(1, ...(data?.jobs_by_source ?? []).map((s) => s.count));
+  const scoreDistribution = data?.score_distribution ?? [];
+  const jobsBySource = data?.jobs_by_source ?? [];
+  const jobsByRemoteMode = data?.jobs_by_remote_mode ?? [];
+  const applicationFunnel = data?.application_funnel ?? [];
+  const topMarketSkills = data?.top_market_skills ?? [];
+
+  const maxBucket = Math.max(1, ...scoreDistribution.map((b) => b.count));
+  const maxSource = Math.max(1, ...jobsBySource.map((s) => s.count));
 
   return (
     <section aria-labelledby="analytics-heading" className="w-full min-w-0 space-y-6 md:space-y-8">
@@ -150,11 +156,11 @@ function AnalyticsContent() {
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Match Score Distribution
               </h2>
-              {data.score_distribution.length === 0 ? (
+              {scoreDistribution.length === 0 ? (
                 <p className="mt-4 text-sm text-muted">No match scores computed yet.</p>
               ) : (
                 <div className="mt-4 space-y-3.5">
-                  {data.score_distribution.map((b) => (
+                  {scoreDistribution.map((b) => (
                     <div key={b.bucket} className="min-w-0">
                       <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
                         <span className="font-mono font-medium tabular-nums text-ink">
@@ -180,11 +186,11 @@ function AnalyticsContent() {
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Jobs by Source
               </h2>
-              {data.jobs_by_source.length === 0 ? (
+              {jobsBySource.length === 0 ? (
                 <p className="mt-4 text-sm text-muted">No source breakdown available yet.</p>
               ) : (
                 <div className="mt-4 space-y-3.5">
-                  {data.jobs_by_source.map((s) => (
+                  {jobsBySource.map((s) => (
                     <div key={s.source} className="min-w-0">
                       <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
                         <span className="min-w-0 truncate font-medium capitalize text-ink">
@@ -214,48 +220,58 @@ function AnalyticsContent() {
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Application Funnel
               </h2>
-              <div className="mt-4 grid grid-cols-2 gap-2.5 text-center sm:grid-cols-5">
-                {data.application_funnel.map((st) => (
-                  <div
-                    key={st.stage}
-                    className="min-w-0 rounded-xl border border-hairline bg-subtle p-3"
-                  >
-                    <p className="font-mono text-xl font-semibold tabular-nums text-ink">
-                      {st.count}
-                    </p>
-                    <p className="mt-1 truncate text-xs capitalize text-muted">{st.stage}</p>
-                  </div>
-                ))}
-              </div>
+              {applicationFunnel.length === 0 ? (
+                <p className="mt-4 text-sm text-muted">
+                  No application pipeline stages recorded yet.
+                </p>
+              ) : (
+                <div className="mt-4 grid grid-cols-2 gap-2.5 text-center sm:grid-cols-5">
+                  {applicationFunnel.map((st) => (
+                    <div
+                      key={st.stage}
+                      className="min-w-0 rounded-xl border border-hairline bg-subtle p-3"
+                    >
+                      <p className="font-mono text-xl font-semibold tabular-nums text-ink">
+                        {st.count}
+                      </p>
+                      <p className="mt-1 truncate text-xs capitalize text-muted">{st.stage}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Surface>
 
             <Surface variant="elevated" radius="2xl" className="min-w-0 p-6">
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Work Mode Split
               </h2>
-              <div className="mt-4 grid grid-cols-1 gap-2.5 text-center sm:grid-cols-3">
-                {data.jobs_by_remote_mode.map((rm) => (
-                  <div
-                    key={rm.mode}
-                    className="min-w-0 rounded-xl border border-hairline bg-subtle p-3"
-                  >
-                    <p className="font-mono text-xl font-semibold tabular-nums text-ink">
-                      {rm.count}
-                    </p>
-                    <p className="mt-1 truncate text-xs capitalize text-muted">{rm.mode}</p>
-                  </div>
-                ))}
-              </div>
+              {jobsByRemoteMode.length === 0 ? (
+                <p className="mt-4 text-sm text-muted">No work mode breakdown available yet.</p>
+              ) : (
+                <div className="mt-4 grid grid-cols-1 gap-2.5 text-center sm:grid-cols-3">
+                  {jobsByRemoteMode.map((rm) => (
+                    <div
+                      key={rm.mode}
+                      className="min-w-0 rounded-xl border border-hairline bg-subtle p-3"
+                    >
+                      <p className="font-mono text-xl font-semibold tabular-nums text-ink">
+                        {rm.count}
+                      </p>
+                      <p className="mt-1 truncate text-xs capitalize text-muted">{rm.mode}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Surface>
           </div>
 
-          {data.top_market_skills.length > 0 && (
+          {topMarketSkills.length > 0 && (
             <Surface variant="elevated" radius="2xl" className="min-w-0 p-6">
               <h2 className="font-display text-lg font-semibold tracking-[-0.015em] text-ink">
                 Top Market Skills
               </h2>
               <div className="mt-4 flex flex-wrap gap-2">
-                {data.top_market_skills.map((sk, idx) => (
+                {topMarketSkills.map((sk, idx) => (
                   <Badge key={`${sk.skill}-${idx}`} tone={sk.matched ? "accent" : "neutral"}>
                     <span>{sk.skill}</span>
                     <span className="font-mono tabular-nums opacity-80">({sk.count})</span>

@@ -32,7 +32,10 @@ function AlertCircleIcon() {
 function ProfileSettingsContent() {
   const uid = useId();
   const { pushToast } = useToast();
-  const { accessToken, updateUser } = useAuthStore();
+  const pushToastRef = useRef(pushToast);
+  pushToastRef.current = pushToast;
+  const { user, updateUser } = useAuthStore();
+  const userId = user?.id ?? null;
   const mountedRef = useRef(true);
   const loadSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -100,17 +103,17 @@ function ProfileSettingsContent() {
       if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "Failed to load profile";
       setLoadError(message);
-      pushToast(message, "error");
+      pushToastRef.current(message, "error");
     } finally {
       if (mountedRef.current && seq === loadSeqRef.current) {
         setLoading(false);
       }
     }
-  }, [pushToast]);
+  }, []);
 
   useEffect(() => {
     void loadProfile();
-  }, [loadProfile, accessToken]);
+  }, [loadProfile, userId]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -151,6 +154,7 @@ function ProfileSettingsContent() {
         }),
       });
       if (!mountedRef.current) return;
+      setFullName(updated.full_name || "");
       updateUser({ full_name: updated.full_name });
       pushToast("Profile saved & ATS matches recalculated!", "success");
     } catch (err) {
@@ -489,6 +493,7 @@ function ProfileSettingsContent() {
                 <input
                   id={currentPwId}
                   type="password"
+                  autoComplete="current-password"
                   required
                   value={currentPassword}
                   onChange={(e) => {
@@ -507,6 +512,7 @@ function ProfileSettingsContent() {
                 <input
                   id={newPwId}
                   type="password"
+                  autoComplete="new-password"
                   required
                   minLength={8}
                   value={newPassword}

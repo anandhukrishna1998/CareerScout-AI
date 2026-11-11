@@ -10,6 +10,12 @@ import { Surface } from "@/components/ui/surface";
 import { ApiError, apiFetch } from "@/lib/api";
 import type { AdminStatus } from "@/lib/types";
 
+function formatRunTimestamp(raw?: string | null): string {
+  if (!raw) return "—";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
+}
+
 function StatusDot({ ok }: { ok: boolean }) {
   return (
     <span
@@ -270,25 +276,32 @@ function AdminContent() {
                         <td className="py-2.5 pr-4 font-medium text-ink">{run.source}</td>
                         <td className="py-2.5 pr-4">{run.backend}</td>
                         <td className="py-2.5 pr-4">
-                          <Badge
-                            tone={
-                              run.status === "success"
-                                ? "success"
-                                : run.status === "failed"
-                                  ? "danger"
-                                  : "neutral"
-                            }
-                            className="capitalize"
-                          >
-                            {run.status}
-                          </Badge>
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge
+                              tone={
+                                run.status === "success"
+                                  ? "success"
+                                  : run.status === "failed"
+                                    ? "danger"
+                                    : "neutral"
+                              }
+                              className="capitalize"
+                            >
+                              {run.status}
+                            </Badge>
+                            {run.status === "failed" && run.error_message && (
+                              <p className="max-w-[260px] break-words text-[11px] leading-snug text-status-danger-fg">
+                                {run.error_message}
+                              </p>
+                            )}
+                          </div>
                         </td>
                         <td className="py-2.5 pr-4 font-mono tabular-nums text-ink">
                           {run.jobs_fetched}
                         </td>
                         <td className="py-2.5 pr-4 font-mono tabular-nums">{run.duration_ms} ms</td>
                         <td className="py-2.5 font-mono tabular-nums text-muted">
-                          {new Date(run.started_at).toLocaleString()}
+                          {formatRunTimestamp(run.started_at)}
                         </td>
                       </tr>
                     ))}
