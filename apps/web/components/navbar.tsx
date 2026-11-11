@@ -149,6 +149,7 @@ export function Navbar() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
 
   const headerRef = useRef<HTMLElement>(null);
   const moreContainerRef = useRef<HTMLDivElement>(null);
@@ -228,20 +229,24 @@ export function Navbar() {
   };
 
   const handleLogout = async () => {
+    if (logoutLoading) return;
+    setLogoutLoading(true);
+    const tokenToRevoke = refreshToken;
+    clearSession();
+    setMoreOpen(false);
+    setMobileOpen(false);
     try {
-      if (refreshToken) {
+      if (tokenToRevoke) {
         await apiFetch("/auth/logout", {
           method: "POST",
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          body: JSON.stringify({ refresh_token: tokenToRevoke }),
           skipAuth: true,
         });
       }
     } catch {
       // ignore logout transport errors
     } finally {
-      clearSession();
-      setMoreOpen(false);
-      setMobileOpen(false);
+      setLogoutLoading(false);
       pushToast("Signed out", "info");
       router.push("/");
     }
@@ -261,41 +266,48 @@ export function Navbar() {
           className="flex shrink-0 items-center gap-2.5 rounded-full py-0.5 pl-0.5 pr-1 text-ink transition duration-150 hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           <BrandMark />
-          <span className="font-display text-base font-semibold tracking-[-0.02em] text-ink md:hidden lg:inline">
+          <span className="inline font-display text-base font-semibold tracking-[-0.02em] text-ink lg:hidden xl:inline">
             CareerScout
           </span>
         </Link>
 
-        <nav
-          aria-label="Primary navigation"
-          className="hidden items-center gap-0.5 rounded-full border border-hairline bg-subtle/75 p-1 md:flex lg:gap-1"
-        >
-          {PRIMARY_LINKS.map((link) => {
-            const active = isActiveRoute(pathname, link.href);
-            return (
-              <Link
-                key={link.href}
-                href={link.href}
-                aria-current={active ? "page" : undefined}
-                className={`whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:px-3 lg:text-sm ${
-                  active
-                    ? "bg-accent-soft font-medium text-accent-soft-ink"
-                    : "text-ink-secondary hover:bg-hover/70 hover:text-ink"
-                }`}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
+        <div className="hidden items-center gap-0.5 rounded-full border border-hairline bg-subtle/75 p-1 lg:flex xl:gap-1">
+          <nav aria-label="Primary navigation" className="flex items-center gap-0.5 xl:gap-1">
+            {PRIMARY_LINKS.map((link) => {
+              const active = isActiveRoute(pathname, link.href);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface xl:px-3 xl:text-sm ${
+                    active
+                      ? "bg-accent-soft font-medium text-accent-soft-ink"
+                      : "text-ink-secondary hover:bg-hover/70 hover:text-ink"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+          </nav>
 
-          <div ref={moreContainerRef} className="relative">
+          <div
+            ref={moreContainerRef}
+            className="relative"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setMoreOpen(false);
+              }
+            }}
+          >
             <button
               ref={moreButtonRef}
               type="button"
               aria-expanded={moreOpen}
               aria-controls="navbar-more-menu"
               onClick={() => setMoreOpen((open) => !open)}
-              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:px-3 lg:text-sm ${
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface xl:px-3 xl:text-sm ${
                 hasActiveSecondary || moreOpen
                   ? "bg-accent-soft font-medium text-accent-soft-ink"
                   : "text-ink-secondary hover:bg-hover/70 hover:text-ink"
@@ -316,7 +328,7 @@ export function Navbar() {
             </button>
 
             {moreOpen && (
-              <div
+              <nav
                 id="navbar-more-menu"
                 aria-label="More workspace routes"
                 className="absolute right-0 top-[calc(100%+0.625rem)] z-50 w-60 rounded-2xl border border-hairline bg-surface p-2 shadow-botanical"
@@ -351,12 +363,12 @@ export function Navbar() {
                     );
                   })}
                 </div>
-              </div>
+              </nav>
             )}
           </div>
-        </nav>
+        </div>
 
-        <div className="hidden shrink-0 items-center gap-1.5 md:flex lg:gap-2">
+        <div className="hidden shrink-0 items-center gap-1.5 lg:flex xl:gap-2">
           <button
             type="button"
             data-testid="theme-toggle"
@@ -383,11 +395,18 @@ export function Navbar() {
                     needsOnboarding ? "bg-[rgb(var(--status-warning-fg))]" : "bg-accent"
                   }`}
                 />
-                <span className="max-w-[90px] truncate lg:max-w-[140px]">
+                <span className="max-w-[96px] truncate xl:max-w-[140px]">
                   {user.full_name || user.email}
                 </span>
               </Link>
-              <Button variant="secondary" size="sm" onClick={handleLogout} className="shrink-0">
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={logoutLoading}
+                disabled={logoutLoading}
+                onClick={handleLogout}
+                className="shrink-0"
+              >
                 Sign out
               </Button>
             </>
@@ -404,13 +423,13 @@ export function Navbar() {
               </Button>
               <Link
                 href="/auth/login"
-                className="inline-flex min-h-[36px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-medium text-ink-secondary transition duration-150 hover:bg-subtle hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:px-3"
+                className="inline-flex min-h-[36px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-medium text-ink-secondary transition duration-150 hover:bg-subtle hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface xl:px-3"
               >
                 Sign in
               </Link>
               <Link
                 href="/auth/register"
-                className="inline-flex min-h-[36px] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-accent px-3.5 py-1.5 text-xs font-medium text-accent-ink transition duration-150 hover:-translate-y-[1px] hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface lg:px-4"
+                className="inline-flex min-h-[36px] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-accent px-3.5 py-1.5 text-xs font-medium text-accent-ink transition duration-150 hover:-translate-y-[1px] hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface xl:px-4"
               >
                 Get Started
               </Link>
@@ -418,7 +437,7 @@ export function Navbar() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 md:hidden">
+        <div className="flex items-center gap-2 lg:hidden">
           <button
             type="button"
             data-testid="theme-toggle-mobile"
@@ -448,7 +467,7 @@ export function Navbar() {
           id="mobile-nav-drawer"
           role="dialog"
           aria-label="Navigation menu"
-          className="mt-2 rounded-3xl border border-hairline bg-surface p-4 shadow-botanical md:hidden"
+          className="mt-2 rounded-3xl border border-hairline bg-surface p-4 shadow-botanical lg:hidden"
         >
           <nav aria-label="Mobile workspace navigation" className="space-y-3">
             <div className="grid grid-cols-2 gap-2">
@@ -492,10 +511,13 @@ export function Navbar() {
                     >
                       <span className="truncate">{link.label}</span>
                       {showSetupDot && (
-                        <span
-                          aria-label="Onboarding incomplete"
-                          className="h-2 w-2 shrink-0 rounded-full bg-[rgb(var(--status-warning-fg))]"
-                        />
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="h-2 w-2 shrink-0 rounded-full bg-[rgb(var(--status-warning-fg))]"
+                          />
+                          <span className="sr-only">Onboarding incomplete</span>
+                        </>
                       )}
                     </Link>
                   );
@@ -520,7 +542,14 @@ export function Navbar() {
                     }`}
                   />
                 </Link>
-                <Button variant="secondary" size="sm" onClick={handleLogout} className="w-full">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={logoutLoading}
+                  disabled={logoutLoading}
+                  onClick={handleLogout}
+                  className="w-full !min-h-[44px]"
+                >
                   Sign out
                 </Button>
               </>
@@ -531,7 +560,7 @@ export function Navbar() {
                   size="sm"
                   loading={demoLoading}
                   onClick={handleDemoLogin}
-                  className="col-span-2 w-full"
+                  className="col-span-2 w-full !min-h-[44px]"
                 >
                   {demoLoading ? "Starting..." : "Try Demo"}
                 </Button>

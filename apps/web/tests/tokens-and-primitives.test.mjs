@@ -427,11 +427,20 @@ test("navbar.tsx satisfies Nordic Botanical floating capsule markup, routes, and
   assert.match(src, /shadow-botanical/);
   assert.match(src, /bg-accent-soft/);
   assert.match(src, /text-accent-soft-ink/);
+  assert.match(src, /lg:flex/);
+  assert.match(src, /lg:hidden/);
+  assert.match(src, /xl:inline/);
+  assert.match(src, /xl:px-3/);
   assert.match(src, /aria-expanded=\{moreOpen\}/);
+  assert.match(src, /<nav[\s\S]*id="navbar-more-menu"/);
+  assert.match(src, /onBlur=/);
   assert.match(src, /pointerdown/);
   assert.match(src, /Escape/);
   assert.match(src, /role="dialog"/);
   assert.match(src, /min-h-\[44px\]/);
+  assert.match(src, /!min-h-\[44px\]/);
+  assert.match(src, /logoutLoading/);
+  assert.match(src, /tokenToRevoke/);
 
   assert.doesNotMatch(
     src,
