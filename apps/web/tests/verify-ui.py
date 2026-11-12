@@ -1159,6 +1159,38 @@ def run_interactive_review_checks(
         assert active["type"] != "file", "Hidden file input should never receive keyboard focus"
         if active["tag"] == "BUTTON" and "Choose File" in active["text"]:
             reached_choose = True
+            focus_styles = page.evaluate(
+                """() => {
+                    const el = document.activeElement;
+                    if (!el) {
+                        return {
+                            matchesFocusVisible: false,
+                            outlineStyle: 'none',
+                            outlineWidth: '0px',
+                            boxShadow: 'none',
+                        };
+                    }
+                    const s = getComputedStyle(el);
+                    return {
+                        matchesFocusVisible: el.matches(':focus-visible'),
+                        outlineStyle: s.outlineStyle,
+                        outlineWidth: s.outlineWidth,
+                        boxShadow: s.boxShadow,
+                    };
+                }"""
+            )
+            assert focus_styles["matchesFocusVisible"], (
+                f"Choose File button did not match :focus-visible on Tab: {focus_styles}"
+            )
+            has_focus_ring = (
+                focus_styles["outlineStyle"] != "none" and focus_styles["outlineWidth"] != "0px"
+            ) or (focus_styles["boxShadow"] not in {"", "none"})
+            assert has_focus_ring, f"Choose File button lacked a visible focus ring: {focus_styles}"
+            with page.expect_file_chooser(timeout=5000) as fc_info:
+                page.keyboard.press("Enter")
+            assert fc_info.value is not None, (
+                "Pressing Enter on focused Choose File button failed to open file chooser"
+            )
             break
     assert reached_choose, "Keyboard Tab navigation failed to reach the visible Choose File button"
 
@@ -1222,21 +1254,72 @@ def run_interactive_review_checks(
     assert_layout_integrity(page, "/jobs", "mobile-390-filters-open", "light")
     page.set_viewport_size({"width": 1440, "height": 900})
 
-    # Simulated 500 error + Retry recovery on /dashboard, /jobs, /email-settings
-    for route, fail_prefix, marker, retry_expected_text in (
-        ("/dashboard", "/matches/daily", "Welcome back", "Today's Strongest Match"),
-        ("/jobs", "/jobs", "Role Explorer", "Senior AI & LLM Engineer"),
-        ("/email-settings", "/email-settings", "Email Settings", "Enable Daily Job Digest"),
-    ):
+    # Simulated 500 error + Retry recovery across all 5 Review Focus routes
+    error_recovery_cases: tuple[tuple[str, str, str, str, tuple[str, ...], bool], ...] = (
+        (
+            "/dashboard",
+            "/matches/daily",
+            "Welcome back",
+            "Today's Strongest Match",
+            ("Ready to rank your daily job feed",),
+            False,
+        ),
+        (
+            "/jobs",
+            "/jobs",
+            "Role Explorer",
+            "Senior AI & LLM Engineer",
+            ("No jobs match your current filters",),
+            False,
+        ),
+        (
+            "/saved-jobs",
+            "/saved-jobs",
+            "Saved Jobs & Tracker",
+            "Senior AI & LLM Engineer",
+            ("No saved jobs yet", "No jobs in this pipeline stage"),
+            False,
+        ),
+        (
+            "/email-settings",
+            "/email-settings",
+            "Email Settings",
+            "Enable Daily Job Digest",
+            ("Enable Daily Job Digest", "No digests sent yet"),
+            True,
+        ),
+        (
+            "/profile-settings",
+            "/profile",
+            "Profile Settings",
+            "Preferences & Matching Stack",
+            ("Preferences & Matching Stack", "Change Password"),
+            True,
+        ),
+    )
+    for (
+        route,
+        fail_prefix,
+        marker,
+        retry_expected_text,
+        forbidden_texts,
+        forbid_form,
+    ) in error_recovery_cases:
         allow_http_500[0] = True
         state.error_prefixes.add(fail_prefix)
         page.goto(f"{base_url}{route}", wait_until="networkidle")
         page.locator('main [role="alert"]').wait_for(state="visible", timeout=10000)
         alert_text = page.locator('main [role="alert"]').inner_text()
         assert "Retry" in alert_text, f"Expected Retry button inside role=alert on {route}"
-        assert "Ready to rank your daily job feed" not in page.locator("main").inner_text(), (
-            f"Fake empty state shown on {route} during 500 error"
-        )
+        main_text = page.locator("main").inner_text()
+        for forbidden_text in forbidden_texts:
+            assert forbidden_text not in main_text, (
+                f"Fake empty/default content {forbidden_text!r} shown on {route} during 500 error"
+            )
+        if forbid_form:
+            assert page.locator("main form").count() == 0, (
+                f"Settings <form> unexpectedly rendered on {route} during 500 error"
+            )
 
         state.error_prefixes.remove(fail_prefix)
         page.get_by_role("button", name="Retry").click()
