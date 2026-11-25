@@ -6,52 +6,87 @@ import httpx
 
 from app.settings import settings
 
-_SKILL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+_SKILL_ALIASES: dict[str, tuple[str, ...]] = {
+    "LLM": ("llm", "llms"),
+}
+
+_SKILL_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = tuple(
     (
         label,
-        re.compile(rf"(?<![A-Za-z0-9]){re.escape(label.lower())}(?![A-Za-z0-9])"),
+        tuple(
+            re.compile(rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])")
+            for alias in _SKILL_ALIASES.get(label, (label.lower(),))
+        ),
     )
     for label in (
         "Python",
+        "Java",
         "TypeScript",
         "JavaScript",
-        "Java",
         "Go",
         "Rust",
         "C++",
         "SQL",
         "NoSQL",
-        "PostgreSQL",
-        "pgvector",
-        "Redis",
-        "FastAPI",
-        "Django",
-        "Next.js",
-        "React",
-        "Docker",
-        "Kubernetes",
-        "Terraform",
-        "AWS",
-        "GCP",
-        "Azure",
-        "PyTorch",
-        "TensorFlow",
-        "LLM",
-        "RAG",
-        "LangChain",
-        "LangGraph",
         "Spark",
         "Airflow",
         "dbt",
         "Kafka",
+        "RabbitMQ",
+        "AWS",
+        "GCP",
+        "Azure",
+        "Docker",
+        "Kubernetes",
+        "Terraform",
+        "Linux",
+        "Git",
+        "LLM",
+        "RAG",
+        "LangChain",
+        "LangGraph",
+        "Langfuse",
+        "CrewAI",
+        "Transformers",
+        "Hugging Face",
+        "Ollama",
+        "BERT",
+        "NLP",
+        "MCP",
+        "PyTorch",
+        "TensorFlow",
+        "Scikit-learn",
+        "XGBoost",
+        "Pandas",
+        "NumPy",
+        "SciPy",
+        "Dask",
+        "Matplotlib",
+        "Seaborn",
+        "Evidently",
+        "MLOps",
+        "FastAPI",
+        "Flask",
+        "Streamlit",
+        "Django",
+        "React",
+        "Next.js",
+        "PostgreSQL",
+        "pgvector",
+        "MongoDB",
+        "Neo4j",
+        "Firestore",
+        "Redis",
+        "Power BI",
         "CI/CD",
+        "GitHub Actions",
     )
 )
 
 
 def extract_skills_local(text: str) -> list[str]:
     lower = text.lower()
-    return [label for label, pat in _SKILL_PATTERNS if pat.search(lower)]
+    return [label for label, patterns in _SKILL_PATTERNS if any(pat.search(lower) for pat in patterns)]
 
 
 def _extract_years_local(text: str) -> int:
@@ -75,7 +110,17 @@ def parse_cv_local(text: str) -> dict[str, Any]:
     years = _extract_years_local(text)
     languages = [
         lang.title()
-        for lang in ("english", "french", "spanish", "german", "italian", "portuguese")
+        for lang in (
+            "english",
+            "french",
+            "spanish",
+            "german",
+            "italian",
+            "portuguese",
+            "hindi",
+            "malayalam",
+            "tamil",
+        )
         if re.search(rf"\b{lang}\b", text.lower())
     ]
     level = _infer_level(years)

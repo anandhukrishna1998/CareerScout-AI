@@ -54,6 +54,12 @@ def _extract_docx_text(content: bytes) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(parts)).strip()
 
 
+def _normalize_pdf_text(text: str) -> str:
+    # Join words hyphenated across PDF line breaks (e.g. "Scikit-\nlearn" -> "Scikit-learn").
+    cleaned = re.sub(r"(?<=[A-Za-z0-9])-\s*\n\s*(?=[A-Za-z0-9])", "-", text)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _extract_pdf_text(content: bytes) -> str:
     try:
         from pypdf import PdfReader  # type: ignore
@@ -61,11 +67,11 @@ def _extract_pdf_text(content: bytes) -> str:
         reader = PdfReader(io.BytesIO(content))
         extracted = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
         if extracted:
-            return extracted
-    except ImportError:
+            return _normalize_pdf_text(extracted)
+    except Exception:
         pass
 
-    # Pure-Python fallback: inspect uncompressed and FlateDecode PDF streams for Tj/TJ text operators.
+    # Pure-Python fallback: inspect uncompressed and FlateDecode PDF streams for Tj text operators.
     chunks: list[str] = []
     stream_pattern = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
     text_pattern = re.compile(rb"\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*Tj", re.DOTALL)
@@ -77,12 +83,17 @@ def _extract_pdf_text(content: bytes) -> str:
         except zlib.error:
             pass
         for tm in text_pattern.finditer(data):
-            decoded = tm.group(1).replace(b"\\(", b"(").replace(b"\\)", b")").replace(b"\\\\", b"\\")
-            chunks.append(decoded.decode("utf-8", errors="ignore"))
+            decoded_bytes = tm.group(1).replace(b"\\(", b"(").replace(b"\\)", b")").replace(b"\\\\", b"\\")
+            # Skip raw CID glyph octal escapes (e.g. "\000\023") that require ToUnicode CMap via pypdf.
+            if re.search(rb"\\[0-7]{3}", decoded_bytes):
+                continue
+            decoded_text = decoded_bytes.decode("utf-8", errors="ignore").strip()
+            if decoded_text:
+                chunks.append(decoded_text)
 
     if chunks:
         return " ".join(chunks).strip()
-    return content.decode("utf-8", errors="ignore").strip()
+    return ""
 
 
 def extract_cv_text(content: bytes, content_type: str, filename: str) -> str:

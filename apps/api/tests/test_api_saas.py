@@ -345,6 +345,14 @@ class CareerScoutApiTests(unittest.TestCase):
         self.assertEqual(digest.status_code, 200)
         self.assertEqual(digest.json()["status"], "simulated")
 
+    def test_pdf_extractor_normalization_and_octal_filter(self) -> None:
+        from app.services.cv_extractor import _normalize_pdf_text, extract_cv_text
+
+        self.assertEqual(_normalize_pdf_text("Scikit-\nlearn\nRAG-\nbased"), "Scikit-learn\nRAG-based")
+        raw_octal_pdf = b"%PDF-1.4\n1 0 obj\n<< /Length 36 >>\nstream\nBT (\\000\\023\\000>) Tj ET\nendstream\nendobj\n%%EOF"
+        extracted = extract_cv_text(raw_octal_pdf, "application/pdf", "glyph.pdf")
+        self.assertEqual(extracted, "")
+
 
 if __name__ == "__main__":
     unittest.main()

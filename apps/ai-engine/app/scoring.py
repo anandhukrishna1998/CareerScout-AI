@@ -49,6 +49,8 @@ SKILL_KEYWORDS = [
     "Hugging Face",
     "Ollama",
     "BERT",
+    "NLP",
+    "MCP",
     "PyTorch",
     "TensorFlow",
     "Scikit-learn",
@@ -56,6 +58,9 @@ SKILL_KEYWORDS = [
     "Pandas",
     "NumPy",
     "SciPy",
+    "Dask",
+    "Matplotlib",
+    "Seaborn",
     "Evidently",
     "MLOps",
     "FastAPI",
@@ -68,9 +73,11 @@ SKILL_KEYWORDS = [
     "pgvector",
     "MongoDB",
     "Neo4j",
+    "Firestore",
     "Redis",
     "Power BI",
     "CI/CD",
+    "GitHub Actions",
 ]
 
 _SKILL_ALIASES: dict[str, tuple[str, ...]] = {
