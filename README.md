@@ -1,119 +1,79 @@
 # CareerScout AI Monorepo
 
-Production-oriented AI-powered job intelligence SaaS scaffold.
+Production-oriented AI-powered job intelligence SaaS platform.
 
 ## Tech Stack
 
-- Frontend: Next.js 15, React 19, TypeScript, TailwindCSS
-- Backend: FastAPI, Pydantic v2, SQLAlchemy 2.0, asyncpg
-- AI Engine: Provider-agnostic LLM abstraction (Gemini enabled)
-- Jobs/Scheduling: Redis + queue workers + scheduler service
-- Data: PostgreSQL + pgvector
-- Infra: Docker Compose + Nginx reverse proxy
-- Python package/environment manager: uv
+- **Frontend:** Next.js 15, React, TypeScript, TailwindCSS, Zustand, TanStack Query
+- **Backend:** FastAPI, Pydantic v2, SQLAlchemy 2.0, asyncpg, Fernet CV encryption at rest
+- **AI Engine:** Provider-agnostic LLM abstraction (Gemini REST + deterministic ATS fallback)
+- **Jobs/Scheduling:** Redis queue workers + APScheduler daily pipeline
+- **Data:** PostgreSQL + pgvector
+- **Infra:** Docker Compose + Nginx reverse proxy
+- **Package Managers:** `pnpm` (Node) + `uv` (Python `>=3.12`)
 
-## Monorepo Layout
+## Quick Start on a Fresh Clone
 
-```txt
-apps/
-  web/
-  api/
-  worker/
-  scheduler/
-  ai-engine/
-packages/
-  ui/
-  types/
-  config/
-  utils/
-infrastructure/
-  docker/
-  nginx/
-```
+### Option 1: Docker Compose (Recommended Full Stack)
 
-## Quick Start (Docker)
-
-1. Copy env:
+1. Install Docker Desktop, `pnpm`, and `uv` (only Docker is needed to run containers).
+2. Create your environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Start all services:
+3. Start all services:
 
 ```bash
 docker compose up --build
 ```
 
-3. Access:
+4. Open:
+   - App (via Nginx): http://localhost
+   - Web directly: http://localhost:3000
+   - API Swagger docs: http://localhost:8000/docs
 
-- Web: http://localhost:3000
-- API: http://localhost:8000/docs (via nginx routing also available)
-- Nginx gateway: http://localhost:80
+### Option 2: Local Setup & Test Suite (Without Docker)
 
-## Python Services and uv
-
-Each Python app (`api`, `worker`, `scheduler`, `ai-engine`) includes:
-
-- `pyproject.toml`
-- `uv.lock` (to be generated in your environment)
-- Dockerfile using `uv sync --frozen`
-
-Generate/update lockfiles locally when dependencies change:
+1. Bootstrap JS and Python workspace dependencies:
 
 ```bash
-cd apps/api && uv lock
-cd ../worker && uv lock
-cd ../scheduler && uv lock
-cd ../ai-engine && uv lock
+make setup
 ```
 
-## MVP Scope Included
+2. Run all automated checks and tests:
 
-- Auth-ready API skeleton with JWT utility
-- CV upload metadata endpoint scaffold
-- Multi-source scraping orchestrator with backend fallbacks (JobSpy/Scrapy/Playwright/httpx)
-- ATS hybrid scoring scaffold
-- Provider-agnostic AI engine with Gemini provider starter
-- Daily digest scheduling/dispatch stubs
-- Secure-by-default infrastructure patterns
+```bash
+make test
+make typecheck
+make lint
+```
 
-## Scraping Coverage
+3. Run the web frontend + API locally:
 
-Configured source catalog includes:
+```bash
+# Terminal 1: API
+.venv/bin/uvicorn app.main:app --app-dir apps/api --reload --port 8000
 
-- LinkedIn Jobs
-- Google Jobs
-- Welcome to the Jungle
-- HelloWork
-- Indeed
-- APEC
-- France Travail
-- Monster
-- Free-Work
-- Malt
-- RemoteOK
-- WeWorkRemotely
-- Greenhouse
-- Lever
-- company career pages
+# Terminal 2: AI Engine
+.venv/bin/uvicorn app.main:app --app-dir apps/ai-engine --reload --port 8010
 
-Notes:
+# Terminal 3: Web
+pnpm dev:web
+```
 
-- `remoteok` and `weworkremotely` have live `httpx` adapters implemented.
-- `greenhouse` and `lever` have live `httpx` adapters through public board APIs (requires company slugs).
-- `google_jobs` supports live retrieval through SerpAPI when `SERPAPI_KEY` is configured.
-- `france_travail` and `apec` support live API adapters when credentials/endpoints are configured.
-- `welcome_to_the_jungle`, `hellowork`, `free_work`, and `malt` support feed-driven adapters using configurable RSS/feed URLs.
-- `company_career_pages` supports live link discovery from configured career page URLs.
-- `linkedin_jobs`, `indeed`, and `monster` can run through `JobSpy` backend.
-- `scrapy` and `playwright` backends are wired as fallback hooks and ready for site-specific spiders/flows.
-- Backend order per source is configurable through `.env`.
+## Monorepo Layout
 
-## Next Steps
-
-- Implement persistent auth + refresh-token storage
-- Add Alembic migrations for full schema
-- Implement real provider adapters and anti-bot strategy
-- Integrate Resend/SendGrid templates
-- Add production CI pipeline and tests
+```txt
+apps/
+  web/         Next.js 15 frontend
+  api/         FastAPI core API (auth, CVs, jobs, matches, insights, analytics, email, admin)
+  ai-engine/   ATS 60/25/15 scoring, CV parsing, Gemini LLM + embeddings
+  worker/      Multi-source job scraper & Redis queue consumer
+  scheduler/   APScheduler daily pipeline dispatcher
+packages/
+  ui/ types/ config/ utils/
+infrastructure/
+  nginx/       Reverse proxy + API rate limiting
+```

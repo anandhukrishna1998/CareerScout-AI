@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -34,17 +35,25 @@ async def scrape_with_httpx(source: str) -> list[NormalizedJob]:
     if source == "company_career_pages":
         return await CompanyCareerPagesAdapter().search_recent_jobs()
     if source == "welcome_to_the_jungle":
-        return await RSSFeedAdapter(source=source, feed_urls_env="WELCOME_TO_THE_JUNGLE_FEEDS").search_recent_jobs()
+        return await RSSFeedAdapter(
+            source=source, feed_urls_env="WELCOME_TO_THE_JUNGLE_FEEDS"
+        ).search_recent_jobs()
     if source == "hellowork":
-        return await RSSFeedAdapter(source=source, feed_urls_env="HELLOWORK_FEEDS").search_recent_jobs()
+        return await RSSFeedAdapter(
+            source=source, feed_urls_env="HELLOWORK_FEEDS"
+        ).search_recent_jobs()
     if source == "free_work":
-        return await RSSFeedAdapter(source=source, feed_urls_env="FREE_WORK_FEEDS").search_recent_jobs()
+        return await RSSFeedAdapter(
+            source=source, feed_urls_env="FREE_WORK_FEEDS"
+        ).search_recent_jobs()
     if source == "malt":
         return await RSSFeedAdapter(source=source, feed_urls_env="MALT_FEEDS").search_recent_jobs()
     return []
 
 
-async def scrape_with_jobspy(source: str, search_term: str, location: str, hours_old: int) -> list[NormalizedJob]:
+async def scrape_with_jobspy(
+    source: str, search_term: str, location: str, hours_old: int
+) -> list[NormalizedJob]:
     site_name = JOBSPY_SITE_MAPPING.get(source)
     if site_name is None:
         return []
@@ -73,11 +82,15 @@ async def scrape_with_jobspy(source: str, search_term: str, location: str, hours
         jobs.append(
             NormalizedJob(
                 source=source,
-                external_id=str(row.get("id") or row.get("job_url") or row.get("title") or "unknown"),
+                external_id=str(
+                    row.get("id") or row.get("job_url") or row.get("title") or "unknown"
+                ),
                 title=str(row.get("title") or "Untitled Role"),
                 company=str(row.get("company") or "Unknown"),
                 location=str(row.get("location") or "Unknown"),
-                posted_at=str(row.get("date_posted") or row.get("date") or "1970-01-01T00:00:00+00:00"),
+                posted_at=str(
+                    row.get("date_posted") or row.get("date") or "1970-01-01T00:00:00+00:00"
+                ),
                 description=str(row.get("description") or ""),
                 apply_url=str(row.get("job_url") or ""),
             )
@@ -86,14 +99,11 @@ async def scrape_with_jobspy(source: str, search_term: str, location: str, hours
 
 
 async def scrape_with_scrapy(source: str) -> list[NormalizedJob]:
-    # Scrapy package is part of dependencies; concrete spiders are added per source.
-    # This fallback hook keeps the execution chain stable until full spiders are implemented.
     logger.info("backend=scrapy source=%s status=not_implemented", source)
     return []
 
 
 async def scrape_with_playwright(source: str) -> list[NormalizedJob]:
-    # Playwright backend is reserved for anti-bot or JS-heavy pages.
     logger.info("backend=playwright source=%s status=not_implemented", source)
     return []
 
@@ -112,32 +122,61 @@ def _enabled_sources() -> list[str]:
     return [s for s in ALL_SOURCES if s in requested]
 
 
-async def scrape_all_sources() -> dict[str, list[NormalizedJob]]:
-    search_term = os.getenv("SCRAPE_SEARCH_TERM", "AI OR Data OR Machine Learning OR Software")
-    location = os.getenv("SCRAPE_LOCATION", "France")
-    hours_old = int(os.getenv("SCRAPE_HOURS_OLD", "24"))
-
-    results: dict[str, list[NormalizedJob]] = {}
-    for source in _enabled_sources():
+async def _scrape_single_source(
+    source: str,
+    semaphore: asyncio.Semaphore,
+    search_term: str,
+    location: str,
+    hours_old: int,
+) -> tuple[str, list[NormalizedJob]]:
+    async with semaphore:
         chain = _backend_chain_for_source(source)
         jobs: list[NormalizedJob] = []
-
         for backend in chain:
-            if backend == "httpx":
-                jobs = await scrape_with_httpx(source)
-            elif backend == "jobspy":
-                jobs = await scrape_with_jobspy(source, search_term=search_term, location=location, hours_old=hours_old)
-            elif backend == "scrapy":
-                jobs = await scrape_with_scrapy(source)
-            elif backend == "playwright":
-                jobs = await scrape_with_playwright(source)
-            else:
-                logger.warning("source=%s backend=%s status=unknown_backend", source, backend)
+            try:
+                if backend == "httpx":
+                    jobs = await scrape_with_httpx(source)
+                elif backend == "jobspy":
+                    jobs = await scrape_with_jobspy(
+                        source, search_term=search_term, location=location, hours_old=hours_old
+                    )
+                elif backend == "scrapy":
+                    jobs = await scrape_with_scrapy(source)
+                elif backend == "playwright":
+                    jobs = await scrape_with_playwright(source)
+                else:
+                    logger.warning("source=%s backend=%s status=unknown_backend", source, backend)
+                    continue
+            except Exception as exc:
+                logger.warning(
+                    "source=%s backend=%s status=error error=%s", source, backend, exc
+                )
                 continue
 
             logger.info("source=%s backend=%s jobs=%s", source, backend, len(jobs))
             if jobs:
                 break
+        return source, jobs
 
-        results[source] = jobs
-    return results
+
+async def scrape_all_sources(sources: list[str] | None = None) -> dict[str, list[NormalizedJob]]:
+    search_term = os.getenv("SCRAPE_SEARCH_TERM", "AI OR Data OR Machine Learning OR Software")
+    location = os.getenv("SCRAPE_LOCATION", "France")
+    hours_old = int(os.getenv("SCRAPE_HOURS_OLD", "24"))
+    concurrency = max(1, int(os.getenv("SCRAPE_CONCURRENCY", "5")))
+
+    target_sources = sources if sources is not None else _enabled_sources()
+    semaphore = asyncio.Semaphore(concurrency)
+    pairs = await asyncio.gather(
+        *[
+            _scrape_single_source(
+                src,
+                semaphore=semaphore,
+                search_term=search_term,
+                location=location,
+                hours_old=hours_old,
+            )
+            for src in target_sources
+        ]
+    )
+    return dict(pairs)

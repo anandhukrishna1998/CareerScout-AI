@@ -1,3 +1,6 @@
+import html
+import os
+import re
 from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
 
@@ -5,10 +8,17 @@ import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_html(raw: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(_TAG_RE.sub(" ", raw or ""))).strip()
+
 
 class WeWorkRemotelyAdapter(JobProviderAdapter):
     async def search_recent_jobs(self) -> list[NormalizedJob]:
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+        hours_old = int(os.getenv("SCRAPE_HOURS_OLD", "24"))
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours_old)
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get("https://weworkremotely.com/remote-jobs.rss")
             response.raise_for_status()
@@ -22,6 +32,7 @@ class WeWorkRemotelyAdapter(JobProviderAdapter):
             title = item.findtext("title", default="Untitled Role")
             link = item.findtext("link", default="https://weworkremotely.com")
             pub_date = item.findtext("pubDate", default="")
+            description = _clean_html(item.findtext("description", default=title)) or title
 
             posted_at = datetime.now(tz=timezone.utc)
             if pub_date:
@@ -41,7 +52,7 @@ class WeWorkRemotelyAdapter(JobProviderAdapter):
                     company=company,
                     location="Remote",
                     posted_at=posted_at.isoformat(),
-                    description=title,
+                    description=description,
                     apply_url=link,
                 )
             )

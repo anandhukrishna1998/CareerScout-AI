@@ -3,10 +3,17 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api
     env_file:
       - .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: /api
+    ports:
+      - "3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - careerscout_net
 
@@ -16,10 +23,24 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - .env
+    environment:
+      UPLOAD_DIR: /app/storage/cvs
+    volumes:
+      - cv_uploads:/app/storage/cvs
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - postgres
-      - redis
-      - ai-engine
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-engine:
+        condition: service_healthy
     networks:
       - careerscout_net
 
@@ -30,9 +51,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
-      - ai-engine
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-engine:
+        condition: service_healthy
     networks:
       - careerscout_net
 
@@ -43,8 +67,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - redis
-      - api
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     networks:
       - careerscout_net
 
@@ -54,22 +80,36 @@ services:
       dockerfile: apps/ai-engine/Dockerfile
     env_file:
       - .env
+    ports:
+      - "8010:8010"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8010/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - careerscout_net
 
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-careerscout}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-careerscout}
+      POSTGRES_DB: ${POSTGRES_DB:-careerscout}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-careerscout} -d ${POSTGRES_DB:-careerscout}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - careerscout_net
 
@@ -77,6 +117,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - careerscout_net
 
@@ -85,8 +130,10 @@ services:
       context: .
       dockerfile: infrastructure/nginx/Dockerfile
     depends_on:
-      - frontend
-      - api
+      frontend:
+        condition: service_started
+      api:
+        condition: service_healthy
     ports:
       - "80:80"
     networks:
@@ -94,6 +141,7 @@ services:
 
 volumes:
   postgres_data:
+  cv_uploads:
 
 networks:
   careerscout_net:

@@ -7,6 +7,8 @@
     "dev:web": "pnpm --filter @careerscout/web dev",
     "build:web": "pnpm --filter @careerscout/web build",
     "lint:web": "pnpm --filter @careerscout/web lint",
+    "typecheck:web": "pnpm --filter @careerscout/web exec tsc --noEmit",
+    "test:web": "node --test apps/web/tests/*.test.mjs",
     "format": "prettier --write .",
     "prepare": "husky",
     "lint-staged": "lint-staged"

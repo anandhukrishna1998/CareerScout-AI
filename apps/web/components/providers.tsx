@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { useAuthStore } from "@/store/auth-store";
 
 type Theme = "dark" | "light";
 type ToastKind = "success" | "error" | "info";
@@ -66,6 +67,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   useEffect(() => {
+    void useAuthStore.persist?.rehydrate?.();
     try {
       const saved = localStorage.getItem("careerscout-theme");
       const resolved: Theme =

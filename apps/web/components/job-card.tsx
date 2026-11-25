@@ -109,7 +109,7 @@ export function JobCard({
   onToggleSave,
 }: JobCardProps) {
   const hasId = typeof id === "number" && Number.isFinite(id);
-  const detailsHref = hasId ? `/jobs/${id}` : "/jobs";
+  const detailsHref = hasId ? (`/jobs/${id}` as `/jobs/${number}`) : ("/jobs" as const);
   const relativeDate = formatRelativeDate(postedAt);
   const hasScore = score !== null && score !== undefined && Number.isFinite(score);
   const roundedScore = hasScore ? Math.round(clampScore(score)) : null;
