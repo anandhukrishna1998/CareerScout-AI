@@ -142,21 +142,19 @@ function JobExplorerContent() {
         method: "POST",
         body: JSON.stringify({
           sources: [
-            "remoteok",
+            "jobicy",
+            "ashby",
+            "greenhouse",
+            "lever",
             "arbeitnow",
             "remotive",
-            "weworkremotely",
-            "himalayas",
-            "jobicy",
-            "greenhouse",
-            "ashby",
           ],
           query: filters.q,
-          location: filters.country || filters.city,
+          location: filters.country || filters.city || "France",
           hours_old: filters.posting_age_hours > 0 ? filters.posting_age_hours : 720,
         }),
       });
-      pushToast(`Fetched ${res.total_ingested} live jobs across public & ATS boards!`, "success");
+      pushToast(`Synced ${res.total_ingested} live France & Europe roles!`, "success");
       if (page !== 1) {
         skipNextEffectKeyRef.current = `${buildJobsQueryString(filters, 1)}|${accessToken ?? ""}`;
         setPage(1);

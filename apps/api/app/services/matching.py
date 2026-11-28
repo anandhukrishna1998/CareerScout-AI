@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import desc, select
+from sqlalchemy import case, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CV, CVParsed, Job, JobMatch, UserProfile
@@ -39,14 +39,24 @@ async def get_active_cv_profile(user_id: int, db: AsyncSession) -> dict[str, obj
 async def recompute_matches_for_user(
     user_id: int,
     db: AsyncSession,
-    limit: int = 100,
+    limit: int = 150,
 ) -> list[JobMatch]:
     cv_profile = await get_active_cv_profile(user_id, db)
     if cv_profile is None:
         return []
 
+    profile = await db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    prefers_france = profile is None or (
+        profile.country.strip().lower() == "france"
+        or any(str(c).strip().lower() == "france" for c in (profile.preferred_countries or []))
+    )
+
     jobs = (
-        await db.scalars(select(Job).order_by(desc(Job.posted_at)).limit(limit))
+        await db.scalars(
+            select(Job)
+            .order_by(case((Job.country == "France", 0), else_=1), desc(Job.posted_at))
+            .limit(limit)
+        )
     ).all()
     if not jobs:
         return []
@@ -69,7 +79,9 @@ async def recompute_matches_for_user(
         if match is None:
             match = JobMatch(user_id=user_id, job_id=job.id, score=0)
             db.add(match)
-        match.score = int(scored.get("score", 0))
+        base_score = int(scored.get("score", 0))
+        france_bonus = 3 if prefers_france and job.country == "France" else 0
+        match.score = min(100, base_score + france_bonus)
         match.skill_score = int(scored.get("skill_score", 0))
         match.semantic_score = int(scored.get("semantic_score", 0))
         match.experience_score = int(scored.get("experience_score", 0))

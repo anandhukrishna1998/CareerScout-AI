@@ -28,16 +28,18 @@ async def _resolve_user(
     except ValueError:
         return None
 
+    token_version = int(payload.get("tv", 1))
+    user: User | None = None
     uid = payload.get("uid")
     if isinstance(uid, int):
         user = await db.get(User, uid)
-        if user is not None:
-            return user
-
-    sub = str(payload.get("sub", ""))
-    if not sub:
+    if user is None:
+        sub = str(payload.get("sub", ""))
+        if sub:
+            user = await db.scalar(select(User).where(User.email == sub))
+    if user is None or int(getattr(user, "token_version", 1)) != token_version:
         return None
-    return await db.scalar(select(User).where(User.email == sub))
+    return user
 
 
 async def get_optional_user(

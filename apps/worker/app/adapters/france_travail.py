@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import is_safe_outbound_https_url
 
 
 class FranceTravailAdapter(JobProviderAdapter):
@@ -13,6 +14,8 @@ class FranceTravailAdapter(JobProviderAdapter):
             return []
 
         base_url = os.getenv("FRANCE_TRAVAIL_API_URL", "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search")
+        if not is_safe_outbound_https_url(base_url):
+            return []
         keyword = os.getenv("SCRAPE_SEARCH_TERM", "data")
         location = os.getenv("SCRAPE_LOCATION", "France")
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=int(os.getenv("SCRAPE_HOURS_OLD", "24")))

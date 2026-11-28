@@ -8,6 +8,7 @@ from app.dependencies import get_current_user, get_db_session
 from app.models import EmailLog, EmailSetting, Job, JobMatch, User
 from app.schemas import EmailSettingsUpdateRequest
 from app.services.emailer import dispatch_email_digest, render_digest_html
+from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -153,7 +154,10 @@ async def preview_email_digest(
     }
 
 
-@router.post("/test-digest")
+@router.post(
+    "/test-digest",
+    dependencies=[Depends(rate_limit_dependency("email-test", limit=5, window_seconds=60))],
+)
 async def send_test_digest(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),

@@ -163,7 +163,8 @@ def score_job_local(cv_profile: dict[str, Any], job: dict[str, Any]) -> dict[str
     missing = [job_lower[k] for k in sorted(set(job_lower) - set(cv_lower))]
 
     overlap_ratio = len(matched) / max(len(job_lower), 1)
-    skill_score = int(round(overlap_ratio * 60))
+    effective_denom = max(len(job_lower), 3)
+    skill_score = int(round((len(matched) / effective_denom) * 60))
 
     cv_tokens = set(re.findall(r"[a-z0-9]{3,}", str(cv_profile.get("summary", "")).lower()))
     job_tokens = set(re.findall(r"[a-z0-9]{3,}", job_text.lower()))

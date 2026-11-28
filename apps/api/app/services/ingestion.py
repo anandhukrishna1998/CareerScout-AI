@@ -12,6 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Job, ScrapeRun
 from app.services.ai_client import extract_skills_local
+from app.services.geo import (
+    is_europe_job,
+    parse_europe_country_city,
+    sanitize_company_slug,
+    sanitize_http_url,
+)
+from app.settings import settings
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -31,20 +38,7 @@ def infer_remote_mode(location: str, title: str, description: str) -> str:
 
 
 def parse_country_city(location: str) -> tuple[str, str]:
-    clean = (location or "").strip()
-    if not clean:
-        return "Worldwide", "Remote"
-    lower = clean.lower()
-    if any(tok in lower for tok in ("worldwide", "anywhere", "remote only", "global")):
-        return "Worldwide", "Remote"
-    parts = [p.strip() for p in clean.split(",") if p.strip()]
-    if len(parts) >= 2:
-        return parts[-1], parts[0]
-    if lower in {"france", "germany", "united kingdom", "united states", "canada", "spain"}:
-        return clean, ""
-    if "paris" in lower or "lyon" in lower:
-        return "France", clean
-    return clean, clean
+    return parse_europe_country_city(location)
 
 
 def _parse_iso_dt(raw: Any) -> datetime:
@@ -73,6 +67,9 @@ async def upsert_jobs(db: AsyncSession, items: list[dict[str, Any]]) -> int:
             f"{item['title']}\n{item['description']}"
         )
         country, city = parse_country_city(str(item.get("location", "")))
+        if settings.europe_only_jobs and country in {"Worldwide", "Remote"}:
+            country = "Europe"
+            city = city or "Remote"
         remote_mode = str(
             item.get("remote_mode")
             or infer_remote_mode(str(item.get("location", "")), str(item["title"]), str(item["description"]))
@@ -91,7 +88,7 @@ async def upsert_jobs(db: AsyncSession, items: list[dict[str, Any]]) -> int:
             "salary_text": str(item.get("salary_text") or "")[:128],
             "skills": list(skills),
             "description": str(item["description"]),
-            "apply_url": str(item.get("apply_url") or "")[:1024],
+            "apply_url": sanitize_http_url(str(item.get("apply_url") or ""))[:1024],
             "posted_at": item["posted_at"],
         }
 
@@ -214,6 +211,145 @@ async def _fetch_weworkremotely(client: httpx.AsyncClient) -> list[dict[str, Any
     return rows
 
 
+async def _fetch_jobicy(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    seen_ids: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for geo in ("france", "europe"):
+        resp = await client.get(
+            "https://jobicy.com/api/v2/remote-jobs",
+            params={"count": 50, "geo": geo},
+        )
+        resp.raise_for_status()
+        for item in resp.json().get("jobs", []):
+            ext_id = str(item.get("id") or item.get("url") or "")
+            if not ext_id or ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            raw_geo = str(item.get("jobGeo") or geo.title()).strip()
+            location = (
+                "Remote, France"
+                if geo == "france" and "france" not in raw_geo.lower()
+                else raw_geo
+            )
+            rows.append(
+                {
+                    "source": "jobicy",
+                    "external_id": ext_id,
+                    "title": html.unescape(str(item.get("jobTitle") or "Untitled Role")),
+                    "company": html.unescape(str(item.get("companyName") or "Unknown")),
+                    "location": location,
+                    "remote_mode": "remote",
+                    "description": clean_html_text(
+                        str(item.get("jobDescription") or item.get("jobExcerpt") or "")
+                    ),
+                    "apply_url": str(item.get("url") or ""),
+                    "posted_at": _parse_iso_dt(item.get("pubDate")),
+                }
+            )
+    return rows
+
+
+async def _fetch_ashby(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    companies = [
+        slug
+        for item in settings.ashby_companies.split(",")
+        if (slug := sanitize_company_slug(item)) is not None
+    ]
+    rows: list[dict[str, Any]] = []
+    for company in companies:
+        try:
+            resp = await client.get(f"https://api.ashbyhq.com/posting-api/job-board/{company}")
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            continue
+        for item in payload.get("jobs", []):
+            loc = str(item.get("location") or "Paris, France")
+            rows.append(
+                {
+                    "source": "ashby",
+                    "external_id": str(item.get("id") or item.get("jobUrl") or ""),
+                    "title": str(item.get("title") or "Untitled Role"),
+                    "company": company.title(),
+                    "location": loc,
+                    "description": clean_html_text(
+                        str(item.get("descriptionPlain") or item.get("descriptionHtml") or item.get("title") or "")
+                    ),
+                    "apply_url": str(item.get("applyUrl") or item.get("jobUrl") or ""),
+                    "posted_at": _parse_iso_dt(item.get("publishedAt")),
+                }
+            )
+    return rows
+
+
+async def _fetch_greenhouse(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    companies = [
+        slug
+        for item in settings.greenhouse_companies.split(",")
+        if (slug := sanitize_company_slug(item)) is not None
+    ]
+    rows: list[dict[str, Any]] = []
+    for company in companies:
+        try:
+            resp = await client.get(
+                f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs",
+                params={"content": "true"},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            continue
+        for item in payload.get("jobs", []):
+            loc = str((item.get("location") or {}).get("name") or "")
+            rows.append(
+                {
+                    "source": "greenhouse",
+                    "external_id": str(item.get("id") or ""),
+                    "title": str(item.get("title") or "Untitled Role"),
+                    "company": company.title(),
+                    "location": loc or "Europe",
+                    "description": clean_html_text(str(item.get("content") or item.get("title") or "")),
+                    "apply_url": str(item.get("absolute_url") or ""),
+                    "posted_at": _parse_iso_dt(item.get("updated_at")),
+                }
+            )
+    return rows
+
+
+async def _fetch_lever(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    companies = [
+        slug
+        for item in settings.lever_companies.split(",")
+        if (slug := sanitize_company_slug(item)) is not None
+    ]
+    rows: list[dict[str, Any]] = []
+    for company in companies:
+        try:
+            resp = await client.get(
+                f"https://api.lever.co/v0/postings/{company}",
+                params={"mode": "json"},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            continue
+        for item in payload:
+            loc = str((item.get("categories") or {}).get("location") or "")
+            rows.append(
+                {
+                    "source": "lever",
+                    "external_id": str(item.get("id") or ""),
+                    "title": str(item.get("text") or "Untitled Role"),
+                    "company": company.title(),
+                    "location": loc or "Paris, France",
+                    "description": str(item.get("descriptionPlain") or item.get("text") or ""),
+                    "apply_url": str(item.get("hostedUrl") or ""),
+                    "posted_at": _parse_iso_dt(item.get("createdAt")),
+                }
+            )
+    return rows
+
+
 async def ingest_sources(
     db: AsyncSession,
     sources: list[str],
@@ -238,12 +374,29 @@ async def ingest_sources(
                     fetched = await _fetch_remotive(client, query=query)
                 elif src == "weworkremotely":
                     fetched = await _fetch_weworkremotely(client)
+                elif src == "jobicy":
+                    fetched = await _fetch_jobicy(client)
+                elif src == "ashby":
+                    fetched = await _fetch_ashby(client)
+                elif src == "greenhouse":
+                    fetched = await _fetch_greenhouse(client)
+                elif src == "lever":
+                    fetched = await _fetch_lever(client)
                 else:
                     status_str = "skipped"
                 filtered = [
                     r
                     for r in fetched
                     if r["posted_at"] >= cutoff
+                    and (
+                        not settings.europe_only_jobs
+                        or is_europe_job(
+                            str(r.get("location", "")),
+                            title=str(r.get("title", "")),
+                            description=str(r.get("description", "")),
+                            source=src,
+                        )
+                    )
                     and (
                         not query.strip()
                         or query.strip().lower() in f"{r['title']} {r['description']}".lower()

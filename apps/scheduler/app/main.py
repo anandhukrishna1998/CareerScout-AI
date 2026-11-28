@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -5,6 +6,7 @@ import time
 
 import redis
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scheduler")
@@ -38,18 +40,22 @@ def enqueue_daily_pipeline(redis_client: redis.Redis | None = None) -> int:
     return pushed
 
 
-def main() -> None:
+def main(run_now: bool = False) -> None:
     cron = os.getenv("DAILY_DIGEST_CRON", "0 7 * * *")
-    minute, hour, *_ = cron.split()
+    trigger = CronTrigger.from_crontab(cron, timezone="UTC")
 
     scheduler = BlockingScheduler(timezone="UTC")
-    scheduler.add_job(enqueue_daily_pipeline, "cron", minute=minute, hour=hour)
+    scheduler.add_job(enqueue_daily_pipeline, trigger)
 
-    enqueue_daily_pipeline()
+    if run_now:
+        enqueue_daily_pipeline()
     scheduler.start()
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-now", action="store_true", help="Enqueue pipeline immediately on start")
+    args = parser.parse_args()
     logger.info("scheduler starting")
     time.sleep(1)
-    main()
+    main(run_now=args.run_now)

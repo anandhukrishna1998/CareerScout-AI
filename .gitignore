@@ -225,6 +225,13 @@ node_modules/
 out/
 *.tsbuildinfo
 
+# Local runtime uploads & SQLite state
+storage/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+
 # Monorepo outputs
 .turbo/
 coverage/

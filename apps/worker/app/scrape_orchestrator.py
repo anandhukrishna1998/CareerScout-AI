@@ -3,11 +3,13 @@ import logging
 import os
 
 from app.adapters.apec import ApecAdapter
+from app.adapters.ashby import AshbyAdapter
 from app.adapters.base import NormalizedJob
 from app.adapters.company_pages import CompanyCareerPagesAdapter
 from app.adapters.france_travail import FranceTravailAdapter
 from app.adapters.google_jobs import GoogleJobsAdapter
 from app.adapters.greenhouse import GreenhouseAdapter
+from app.adapters.jobicy import JobicyAdapter
 from app.adapters.lever import LeverAdapter
 from app.adapters.remoteok import RemoteOkAdapter
 from app.adapters.rss_feed import RSSFeedAdapter
@@ -26,6 +28,10 @@ async def scrape_with_httpx(source: str) -> list[NormalizedJob]:
         return await GreenhouseAdapter().search_recent_jobs()
     if source == "lever":
         return await LeverAdapter().search_recent_jobs()
+    if source == "ashby":
+        return await AshbyAdapter().search_recent_jobs()
+    if source == "jobicy":
+        return await JobicyAdapter().search_recent_jobs()
     if source == "france_travail":
         return await FranceTravailAdapter().search_recent_jobs()
     if source == "apec":
@@ -65,7 +71,8 @@ async def scrape_with_jobspy(
         return []
 
     try:
-        results = scrape_jobs(
+        results = await asyncio.to_thread(
+            scrape_jobs,
             site_name=[site_name],
             search_term=search_term,
             location=location,

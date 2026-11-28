@@ -91,14 +91,12 @@ function AdminContent() {
         method: "POST",
         body: JSON.stringify({
           sources: [
-            "remoteok",
+            "jobicy",
+            "ashby",
+            "greenhouse",
+            "lever",
             "arbeitnow",
             "remotive",
-            "weworkremotely",
-            "himalayas",
-            "jobicy",
-            "greenhouse",
-            "ashby",
           ],
           hours_old: 720,
         }),

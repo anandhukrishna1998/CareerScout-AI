@@ -51,6 +51,7 @@ async def analytics_overview(
     ]
 
     source_counts = Counter(j.source for j in jobs if j.source)
+    country_counts = Counter(j.country for j in jobs if j.country)
     remote_counts = Counter(j.remote_mode for j in jobs if j.remote_mode)
 
     cv_profile = await get_active_cv_profile(current_user.id, db)
@@ -73,6 +74,13 @@ async def analytics_overview(
         "score_distribution": [{"bucket": b, "count": c} for b, c in buckets],
         "jobs_by_source": [
             {"source": src, "count": cnt} for src, cnt in source_counts.most_common(8)
+        ],
+        "jobs_by_country": [
+            {"country": ctry, "count": cnt}
+            for ctry, cnt in sorted(
+                country_counts.items(),
+                key=lambda kv: (kv[0] != "France", -kv[1], kv[0]),
+            )[:8]
         ],
         "jobs_by_remote_mode": [
             {"mode": mode, "count": remote_counts.get(mode, 0)}

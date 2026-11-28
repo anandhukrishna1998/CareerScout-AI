@@ -13,6 +13,8 @@ ALL_SOURCES = [
     "weworkremotely",
     "greenhouse",
     "lever",
+    "ashby",
+    "jobicy",
     "company_career_pages",
 ]
 
@@ -32,6 +34,8 @@ DEFAULT_BACKEND_CHAIN_BY_SOURCE: dict[str, list[str]] = {
     "weworkremotely": ["httpx", "scrapy", "playwright"],
     "greenhouse": ["httpx", "scrapy", "playwright"],
     "lever": ["httpx", "scrapy", "playwright"],
+    "ashby": ["httpx", "scrapy", "playwright"],
+    "jobicy": ["httpx", "scrapy", "playwright"],
     "company_career_pages": ["httpx", "scrapy", "playwright"],
 }
 

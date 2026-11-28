@@ -85,18 +85,19 @@ class _SyncAsyncEngineShim:
 
 
 def _is_sqlite_url(url: str) -> bool:
-    return url.startswith("sqlite:")
+    return url.startswith("sqlite:") or url.startswith("sqlite+aiosqlite:")
 
 
-def _ensure_sqlite_parent(url: str) -> str:
-    if url.startswith("sqlite:///") and ":memory:" not in url:
-        raw_path = url.replace("sqlite:///", "", 1)
+def _normalize_sqlite_url(url: str) -> str:
+    normalized = url.replace("sqlite+aiosqlite:", "sqlite:", 1)
+    if normalized.startswith("sqlite:///") and ":memory:" not in normalized:
+        raw_path = normalized.replace("sqlite:///", "", 1)
         Path(raw_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-    return url
+    return normalized
 
 
 if _is_sqlite_url(settings.database_url):
-    _db_url = _ensure_sqlite_parent(settings.database_url)
+    _db_url = _normalize_sqlite_url(settings.database_url)
     _kwargs: dict[str, Any] = {"connect_args": {"check_same_thread": False}}
     if ":memory:" in _db_url:
         _kwargs["poolclass"] = StaticPool

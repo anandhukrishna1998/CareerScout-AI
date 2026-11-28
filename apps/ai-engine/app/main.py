@@ -153,13 +153,25 @@ async def generate_cover_letter(payload: CoverLetterRequest) -> dict[str, str]:
     if generated:
         return {"cover_letter": generated}
     company = payload.job.company or "hiring"
-    return {
-        "cover_letter": (
-            f"Dear {company} team,\n\n"
-            f"With {payload.cv_profile.years_experience}+ years of experience in {skills}, "
-            f"I am excited to apply for the {payload.job.title} role.\n\n"
-            f"Best regards"
+    tone = payload.tone.strip().lower()
+    if tone == "enthusiastic":
+        opening = (
+            f"I am thrilled to apply for the {payload.job.title} role at {company}! "
+            f"Over {payload.cv_profile.years_experience}+ years building systems with {skills}, "
+            "I have loved turning ambitious AI and engineering ideas into reliable products."
         )
+    elif tone == "executive":
+        opening = (
+            f"With {payload.cv_profile.years_experience}+ years of delivery leadership spanning {skills}, "
+            f"I am writing to express strong interest in leading outcomes as your {payload.job.title} at {company}."
+        )
+    else:
+        opening = (
+            f"With {payload.cv_profile.years_experience}+ years of experience in {skills}, "
+            f"I am excited to apply for the {payload.job.title} role at {company}."
+        )
+    return {
+        "cover_letter": f"Dear {company} team,\n\n{opening}\n\nBest regards"
     }
 
 

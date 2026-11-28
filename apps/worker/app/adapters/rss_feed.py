@@ -6,6 +6,7 @@ from xml.etree import ElementTree
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import is_safe_outbound_https_url, sanitize_http_url
 
 
 class RSSFeedAdapter(JobProviderAdapter):
@@ -23,16 +24,18 @@ class RSSFeedAdapter(JobProviderAdapter):
 
         async with httpx.AsyncClient(timeout=30) as client:
             for feed_url in feeds:
+                if not is_safe_outbound_https_url(feed_url):
+                    continue
                 try:
                     response = await client.get(feed_url)
                     response.raise_for_status()
-                    root = ElementTree.fromstring(response.text)
+                    root = ElementTree.fromstring(response.text[:5_000_000])
                 except Exception:
                     continue
 
                 for item in root.findall(".//item"):
                     title = item.findtext("title", default="Untitled Role")
-                    link = item.findtext("link", default=feed_url)
+                    link = sanitize_http_url(item.findtext("link", default=feed_url))
                     guid = item.findtext("guid", default=link)
                     description = item.findtext("description", default="")
                     pub_date = item.findtext("pubDate", default="")
@@ -41,6 +44,8 @@ class RSSFeedAdapter(JobProviderAdapter):
                     if pub_date:
                         try:
                             posted_at = parsedate_to_datetime(pub_date)
+                            if posted_at.tzinfo is None:
+                                posted_at = posted_at.replace(tzinfo=timezone.utc)
                         except Exception:
                             pass
                     if posted_at < cutoff:

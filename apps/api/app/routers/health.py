@@ -15,9 +15,9 @@ async def healthz() -> dict[str, str]:
 async def readyz() -> JSONResponse:
     try:
         await check_db_ready()
-    except Exception as exc:
+    except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "database": str(exc)[:120]},
+            content={"status": "degraded", "database": "unavailable"},
         )
     return JSONResponse(status_code=200, content={"status": "ok", "database": "ok"})

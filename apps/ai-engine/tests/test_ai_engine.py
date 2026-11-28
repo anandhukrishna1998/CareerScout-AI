@@ -65,6 +65,35 @@ class AIEngineTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertGreater(results[0]["score"], results[1]["score"])
 
+    def test_cover_letter_fallback_varies_by_tone(self) -> None:
+        outputs = {}
+        for tone in ("concise", "enthusiastic", "executive"):
+            res = self.client.post(
+                "/ai/cover-letter",
+                json={
+                    "cv_profile": {"skills": ["Python", "LLM"], "years_experience": 4},
+                    "job": {"title": "AI Engineer", "company": "Acme AI", "description": "Python LLM"},
+                    "tone": tone,
+                },
+            )
+            self.assertEqual(res.status_code, 200)
+            outputs[tone] = res.json()["cover_letter"]
+        self.assertEqual(len(set(outputs.values())), 3)
+
+    def test_single_keyword_role_does_not_saturate_skill_score(self) -> None:
+        noisy = compute_hybrid_score(
+            cv_skills=["Python", "LLM", "RAG", "Git"],
+            job_text="Technical Sales Specialist (Electrical Market) - Git",
+            years_experience=3,
+        )
+        real_match = compute_hybrid_score(
+            cv_skills=["Python", "LLM", "RAG", "Git"],
+            job_text="AI Engineer building Python LLM RAG pipelines",
+            years_experience=3,
+        )
+        self.assertLessEqual(noisy.skill_score, 25)
+        self.assertGreater(real_match.score, noisy.score)
+
 
 if __name__ == "__main__":
     unittest.main()

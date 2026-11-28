@@ -85,14 +85,15 @@ async def send_chat_message(
     job_ctx: dict[str, object] | None = None
     if payload.job_id is not None:
         job = await db.get(Job, payload.job_id)
-        if job is not None:
-            job_ctx = {
-                "id": job.id,
-                "title": job.title,
-                "company": job.company,
-                "description": job.description,
-                "location": job.location,
-            }
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        job_ctx = {
+            "id": job.id,
+            "title": job.title,
+            "company": job.company,
+            "description": job.description,
+            "location": job.location,
+        }
 
     user_msg = ChatMessage(
         user_id=current_user.id,

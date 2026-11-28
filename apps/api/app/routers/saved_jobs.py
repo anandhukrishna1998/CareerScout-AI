@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,15 +39,15 @@ def _serialize_saved(saved: SavedJob, job: Job, match: JobMatch | None) -> dict[
 
 @router.get("")
 async def list_saved_jobs(
+    status_filter: str | None = Query(default=None, alias="status"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, list[dict[str, object]]]:
+    stmt = select(SavedJob).where(SavedJob.user_id == current_user.id)
+    if status_filter and status_filter.strip().lower() != "all":
+        stmt = stmt.where(SavedJob.status == status_filter.strip().lower())
     saved_rows = (
-        await db.scalars(
-            select(SavedJob)
-            .where(SavedJob.user_id == current_user.id)
-            .order_by(desc(SavedJob.updated_at), desc(SavedJob.id))
-        )
+        await db.scalars(stmt.order_by(desc(SavedJob.updated_at), desc(SavedJob.id)))
     ).all()
     if not saved_rows:
         return {"items": []}

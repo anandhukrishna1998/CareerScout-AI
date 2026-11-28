@@ -140,7 +140,7 @@ function OnboardingWizardInner() {
 
   const [headline, setHeadline] = useState("AI & Python Engineer");
   const [country, setCountry] = useState("France");
-  const [preferredCountries, setPreferredCountries] = useState("France, Worldwide");
+  const [preferredCountries, setPreferredCountries] = useState("France, Europe");
   const [cities, setCities] = useState("Paris, Lyon");
   const [experienceLevel, setExperienceLevel] = useState("mid");
   const [yearsExperience, setYearsExperience] = useState(3);

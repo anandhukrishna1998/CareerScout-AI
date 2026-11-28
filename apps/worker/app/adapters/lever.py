@@ -4,11 +4,19 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import sanitize_company_slug
+
+DEFAULT_FR_EU_LEVER_COMPANIES = "swile"
 
 
 class LeverAdapter(JobProviderAdapter):
     async def search_recent_jobs(self) -> list[NormalizedJob]:
-        companies = [c.strip() for c in os.getenv("LEVER_COMPANIES", "").split(",") if c.strip()]
+        raw = (os.getenv("LEVER_COMPANIES") or DEFAULT_FR_EU_LEVER_COMPANIES).strip()
+        companies = [
+            slug
+            for c in raw.split(",")
+            if (slug := sanitize_company_slug(c)) is not None
+        ]
         if not companies:
             return []
 

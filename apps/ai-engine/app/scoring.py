@@ -132,7 +132,9 @@ def compute_hybrid_score(
     missing = [job_map[k] for k in sorted(set(job_map) - set(cv_map))]
 
     skill_overlap_ratio = len(overlap) / max(len(job_map), 1)
-    skill_score = int(round(skill_overlap_ratio * 60))
+    # Dampen 1-2 keyword postings so non-engineering roles mentioning a single tool don't saturate 60/60.
+    effective_skill_denom = max(len(job_map), 3)
+    skill_score = int(round((len(overlap) / effective_skill_denom) * 60))
 
     cv_tokens = set(re.findall(r"[a-z0-9]{3,}", cv_summary.lower()))
     job_tokens = set(re.findall(r"[a-z0-9]{3,}", job_text.lower()))

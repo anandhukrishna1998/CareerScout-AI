@@ -47,12 +47,14 @@ def _issue_token(
     token_type: str,
     user_id: int | None = None,
     role: str = "user",
+    token_version: int = 1,
 ) -> str:
     now = datetime.now(tz=timezone.utc)
     payload: dict[str, Any] = {
         "sub": subject,
         "type": token_type,
         "role": role,
+        "tv": token_version,
         "jti": str(uuid.uuid4()),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=minutes)).timestamp()),
@@ -62,17 +64,22 @@ def _issue_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def create_access_token(subject: str, user_id: int | None = None, role: str = "user") -> str:
+def create_access_token(
+    subject: str, user_id: int | None = None, role: str = "user", token_version: int = 1
+) -> str:
     return _issue_token(
         subject=subject,
         minutes=settings.jwt_access_ttl_minutes,
         token_type="access",
         user_id=user_id,
         role=role,
+        token_version=token_version,
     )
 
 
-def create_refresh_token(subject: str, user_id: int | None = None, role: str = "user") -> str:
+def create_refresh_token(
+    subject: str, user_id: int | None = None, role: str = "user", token_version: int = 1
+) -> str:
     minutes = settings.jwt_refresh_ttl_days * 24 * 60
     return _issue_token(
         subject=subject,
@@ -80,6 +87,7 @@ def create_refresh_token(subject: str, user_id: int | None = None, role: str = "
         token_type="refresh",
         user_id=user_id,
         role=role,
+        token_version=token_version,
     )
 
 

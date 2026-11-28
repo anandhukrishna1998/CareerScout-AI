@@ -60,18 +60,23 @@ async function refreshSession(): Promise<TokenPair | null> {
   }
 
   if (!refreshPromise) {
+    const usedRefreshToken = refreshToken;
     refreshPromise = (async () => {
       try {
         const res = await fetch(buildUrl("/auth/refresh"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          body: JSON.stringify({ refresh_token: usedRefreshToken }),
         });
         if (!res.ok) {
           clearSession();
           return null;
         }
         const pair = (await res.json()) as TokenPair;
+        // Abort session restore if user signed out or switched accounts mid-refresh.
+        if (useAuthStore.getState().refreshToken !== usedRefreshToken) {
+          return null;
+        }
         setSession(pair);
         return pair;
       } catch {

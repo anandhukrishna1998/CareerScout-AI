@@ -33,6 +33,8 @@ class GoogleJobsAdapter(JobProviderAdapter):
             if posted_at < cutoff:
                 continue
 
+            related = item.get("related_links")
+            first_link = related[0] if isinstance(related, list) and related and isinstance(related[0], dict) else {}
             jobs.append(
                 NormalizedJob(
                     source="google_jobs",
@@ -42,7 +44,7 @@ class GoogleJobsAdapter(JobProviderAdapter):
                     location=str(item.get("location") or "Unknown"),
                     posted_at=posted_at.isoformat(),
                     description=str(item.get("description") or ""),
-                    apply_url=str(item.get("related_links", [{}])[0].get("link") if item.get("related_links") else ""),
+                    apply_url=str(first_link.get("link") or ""),
                 )
             )
         return jobs

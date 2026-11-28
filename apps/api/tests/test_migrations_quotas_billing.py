@@ -111,9 +111,12 @@ class MigrationsQuotasBillingTests(unittest.TestCase):
             applied_second = apply_migrations(conn)
             cols = {c["name"] for c in inspect(conn).get_columns("users")}
 
-        self.assertEqual(applied_first, ["0001_saas_user_cv_job_columns"])
+        self.assertEqual(
+            applied_first,
+            ["0001_saas_user_cv_job_columns", "0002_security_token_version"],
+        )
         self.assertEqual(applied_second, [])
-        self.assertTrue({"full_name", "plan", "onboarding_completed"}.issubset(cols))
+        self.assertTrue({"full_name", "plan", "onboarding_completed", "token_version"}.issubset(cols))
         legacy_engine.dispose()
 
     def test_cv_quota_and_stripe_webhook_upgrade(self) -> None:
@@ -160,6 +163,20 @@ class MigrationsQuotasBillingTests(unittest.TestCase):
             headers={"stripe-signature": "t=123,v1=deadbeef"},
         )
         self.assertEqual(bad_wh.status_code, 400)
+
+        # Expired Stripe webhook timestamp (>300s) rejected even with valid HMAC
+        stale_ts = str(int(time.time()) - 600)
+        stale_sig = hmac.new(
+            b"whsec_test_secret_2026",
+            f"{stale_ts}.".encode("utf-8") + payload_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+        stale_wh = self.client.post(
+            "/billing/webhook",
+            content=payload_bytes,
+            headers={"stripe-signature": f"t={stale_ts},v1={stale_sig}"},
+        )
+        self.assertEqual(stale_wh.status_code, 400)
 
         # Valid signed Stripe webhook upgrades plan to pro and unlocks 6th CV
         ts = str(int(time.time()))

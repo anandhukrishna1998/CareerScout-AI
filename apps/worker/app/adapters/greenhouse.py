@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import sanitize_company_slug
 
 _TAG_RE = re.compile(r"<[^>]+>")
+DEFAULT_FR_EU_GREENHOUSE_COMPANIES = "algolia,mirakl,datacamp"
 
 
 def _clean_html(raw: str) -> str:
@@ -16,8 +18,11 @@ def _clean_html(raw: str) -> str:
 
 class GreenhouseAdapter(JobProviderAdapter):
     async def search_recent_jobs(self) -> list[NormalizedJob]:
+        raw = (os.getenv("GREENHOUSE_COMPANIES") or DEFAULT_FR_EU_GREENHOUSE_COMPANIES).strip()
         companies = [
-            c.strip() for c in os.getenv("GREENHOUSE_COMPANIES", "").split(",") if c.strip()
+            slug
+            for c in raw.split(",")
+            if (slug := sanitize_company_slug(c)) is not None
         ]
         if not companies:
             return []

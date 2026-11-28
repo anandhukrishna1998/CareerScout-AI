@@ -143,19 +143,17 @@ function DashboardContent() {
         method: "POST",
         body: JSON.stringify({
           sources: [
-            "remoteok",
+            "jobicy",
+            "ashby",
+            "greenhouse",
+            "lever",
             "arbeitnow",
             "remotive",
-            "weworkremotely",
-            "himalayas",
-            "jobicy",
-            "greenhouse",
-            "ashby",
           ],
           hours_old: 720,
         }),
       });
-      pushToast(`Synced ${res.total_ingested} live jobs & updated ATS matches!`, "success");
+      pushToast(`Synced ${res.total_ingested} live France & Europe jobs & updated ATS matches!`, "success");
       await loadData();
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "Live fetch failed", "error");

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import func, select
@@ -12,25 +13,36 @@ from app.services.quotas import get_plan_limits
 from app.settings import settings
 
 router = APIRouter()
+_MAX_WEBHOOK_AGE_SECONDS = 300
 
 
 def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) -> bool:
-    if not secret:
+    if not secret or not sig_header:
         return False
-    parts: dict[str, str] = {}
+    timestamp: str | None = None
+    v1_signatures: list[str] = []
     for item in sig_header.split(","):
         if "=" in item:
             k, v = item.split("=", 1)
-            parts[k.strip()] = v.strip()
-    timestamp = parts.get("t")
-    signature = parts.get("v1")
-    if not timestamp or not signature:
+            key = k.strip()
+            val = v.strip()
+            if key == "t":
+                timestamp = val
+            elif key == "v1" and val:
+                v1_signatures.append(val)
+    if not timestamp or not v1_signatures:
+        return False
+    try:
+        ts_int = int(timestamp)
+    except ValueError:
+        return False
+    if abs(int(time.time()) - ts_int) > _MAX_WEBHOOK_AGE_SECONDS:
         return False
     signed_payload = f"{timestamp}.".encode("utf-8") + payload
     expected = hmac.new(
         secret.encode("utf-8"), signed_payload, hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return any(hmac.compare_digest(expected, sig) for sig in v1_signatures)
 
 
 @router.get("/status")
@@ -81,7 +93,10 @@ async def stripe_webhook(
     if not verify_stripe_signature(body, stripe_signature, settings.stripe_webhook_secret):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
 
-    event = json.loads(body.decode("utf-8"))
+    try:
+        event = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed webhook JSON") from exc
     event_type = event.get("type", "")
     data_obj = event.get("data", {}).get("object", {})
     customer_email = str(data_obj.get("customer_email") or "").strip().lower()

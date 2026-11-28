@@ -32,6 +32,12 @@ MIGRATIONS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("job_matches", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"),
         ],
     ),
+    (
+        "0002_security_token_version",
+        [
+            ("users", "token_version", "INTEGER NOT NULL DEFAULT 1"),
+        ],
+    ),
 ]
 
 

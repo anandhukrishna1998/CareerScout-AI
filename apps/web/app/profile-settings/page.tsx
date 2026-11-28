@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { SectionState } from "@/components/ui/section-state";
 import { Surface } from "@/components/ui/surface";
 import { apiFetch } from "@/lib/api";
-import type { UserProfile } from "@/lib/types";
+import type { TokenPair, UserProfile } from "@/lib/types";
 import { useAuthStore } from "@/store/auth-store";
 
 function AlertCircleIcon() {
@@ -34,7 +34,7 @@ function ProfileSettingsContent() {
   const { pushToast } = useToast();
   const pushToastRef = useRef(pushToast);
   pushToastRef.current = pushToast;
-  const { user, updateUser } = useAuthStore();
+  const { user, updateUser, setSession } = useAuthStore();
   const userId = user?.id ?? null;
   const mountedRef = useRef(true);
   const loadSeqRef = useRef(0);
@@ -179,11 +179,14 @@ function ProfileSettingsContent() {
     }
     setChangingPw(true);
     try {
-      await apiFetch("/auth/change-password", {
+      const res = await apiFetch<Partial<TokenPair> & { ok?: boolean }>("/auth/change-password", {
         method: "POST",
         body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
       });
       if (!mountedRef.current) return;
+      if (res?.access_token && res?.refresh_token && res?.user) {
+        setSession(res as TokenPair);
+      }
       setCurrentPassword("");
       setNewPassword("");
       pushToast("Password updated!", "success");

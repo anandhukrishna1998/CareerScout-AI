@@ -4,12 +4,13 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import is_safe_outbound_https_url
 
 
 class ApecAdapter(JobProviderAdapter):
     async def search_recent_jobs(self) -> list[NormalizedJob]:
         api_url = os.getenv("APEC_API_URL", "").strip()
-        if not api_url:
+        if not api_url or not is_safe_outbound_https_url(api_url):
             return []
 
         api_key = os.getenv("APEC_API_KEY", "").strip()

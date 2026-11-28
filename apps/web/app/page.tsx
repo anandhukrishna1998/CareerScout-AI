@@ -119,7 +119,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="mt-5 max-w-[54ch] text-base leading-[1.6] text-ink-secondary">
-            CareerScout continuously aggregates live tech openings, scores hybrid ATS fit against
+            CareerScout continuously aggregates live French &amp; European tech openings, scores hybrid ATS fit against
             your encrypted resume, identifies missing skills, and prepares tailored daily digests.
           </p>
 

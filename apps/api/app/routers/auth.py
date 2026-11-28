@@ -1,13 +1,14 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db_session
 from app.models import (
     CV,
-    CVParsed,
     ChatMessage,
     EmailSetting,
     RefreshToken,
@@ -49,8 +50,9 @@ def _to_user_out(user: User) -> UserOut:
 
 
 async def _issue_token_pair(user: User, db: AsyncSession) -> TokenPair:
-    access = create_access_token(subject=user.email, user_id=user.id, role=user.role)
-    refresh = create_refresh_token(subject=user.email, user_id=user.id, role=user.role)
+    tv = int(getattr(user, "token_version", 1))
+    access = create_access_token(subject=user.email, user_id=user.id, role=user.role, token_version=tv)
+    refresh = create_refresh_token(subject=user.email, user_id=user.id, role=user.role, token_version=tv)
     expires_at = datetime.now(tz=timezone.utc) + timedelta(days=settings.jwt_refresh_ttl_days)
     db.add(
         RefreshToken(
@@ -75,7 +77,7 @@ async def _ensure_user_defaults(user: User, db: AsyncSession) -> None:
                 user_id=user.id,
                 headline="AI & Python Engineer",
                 country="France",
-                preferred_countries=["France", "Worldwide"],
+                preferred_countries=["France", "Europe"],
                 cities=["Paris", "Lyon"],
                 experience_level="mid",
                 years_experience=3,
@@ -116,7 +118,13 @@ async def register(
         onboarding_completed=False,
     )
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        ) from exc
     await _ensure_user_defaults(user, db)
     return await _issue_token_pair(user, db)
 
@@ -128,6 +136,11 @@ async def register(
 )
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db_session)) -> TokenPair:
     normalized_email = payload.email.strip().lower()
+    if normalized_email == "ada@careerscout.ai" and not settings.demo_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo workspace is disabled in production.",
+        )
     user = await db.scalar(select(User).where(User.email == normalized_email))
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
@@ -170,10 +183,14 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db_ses
         )
 
     user = await db.get(User, stored.user_id)
-    if user is None or user.email != decoded.get("sub"):
+    if (
+        user is None
+        or user.email != decoded.get("sub")
+        or int(decoded.get("tv", 1)) != int(getattr(user, "token_version", 1))
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User no longer exists.",
+            detail="User session invalidated.",
         )
 
     stored.revoked_at = now
@@ -191,7 +208,11 @@ async def logout(payload: LogoutRequest, db: AsyncSession = Depends(get_db_sessi
     return {"ok": True}
 
 
-@router.post("/demo", response_model=TokenPair)
+@router.post(
+    "/demo",
+    response_model=TokenPair,
+    dependencies=[Depends(rate_limit_dependency("auth-demo", limit=20, window_seconds=60))],
+)
 async def demo_login(db: AsyncSession = Depends(get_db_session)) -> TokenPair:
     if not settings.demo_enabled:
         raise HTTPException(
@@ -205,7 +226,7 @@ async def demo_login(db: AsyncSession = Depends(get_db_session)) -> TokenPair:
         user = User(
             email=demo_email,
             full_name="Ada Lovelace",
-            password_hash=hash_password("demo-workspace-2026"),
+            password_hash=hash_password(secrets.token_urlsafe(32)),
             role="admin",
             plan="pro",
             onboarding_completed=True,
@@ -221,20 +242,35 @@ async def me(current_user: User = Depends(get_current_user)) -> UserOut:
     return _to_user_out(current_user)
 
 
-@router.post("/change-password")
+@router.post(
+    "/change-password",
+    dependencies=[Depends(rate_limit_dependency("auth-change-pw", limit=10, window_seconds=60))],
+)
 async def change_password(
     payload: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
-) -> dict[str, bool]:
+) -> dict[str, object]:
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Current password is incorrect.",
         )
     current_user.password_hash = hash_password(payload.new_password)
-    await db.commit()
-    return {"ok": True}
+    current_user.token_version = int(getattr(current_user, "token_version", 1)) + 1
+    now = datetime.now(tz=timezone.utc)
+    active_tokens = (
+        await db.scalars(
+            select(RefreshToken).where(
+                RefreshToken.user_id == current_user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    for tok in active_tokens:
+        tok.revoked_at = now
+    pair = await _issue_token_pair(current_user, db)
+    return {"ok": True, **pair.model_dump()}
 
 
 @router.get("/export")

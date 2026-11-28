@@ -27,12 +27,12 @@ export type FilterPanelProps = {
 };
 
 const QUICK_COUNTRIES = [
-  { label: "All", value: "" },
+  { label: "All Europe", value: "" },
   { label: "France", value: "France" },
   { label: "Germany", value: "Germany" },
-  { label: "USA", value: "United States" },
   { label: "UK", value: "United Kingdom" },
-  { label: "Worldwide", value: "Worldwide" },
+  { label: "Netherlands", value: "Netherlands" },
+  { label: "Switzerland", value: "Switzerland" },
 ];
 
 function countActiveFilters(filters: JobFiltersState): number {
@@ -109,13 +109,18 @@ export function FilterPanel({
       "France",
       "Germany",
       "United Kingdom",
-      "United States",
-      "Canada",
+      "Netherlands",
       "Switzerland",
-      "India",
-      "Worldwide",
+      "Spain",
+      "Belgium",
+      "Italy",
+      "Ireland",
+      "Portugal",
+      "Luxembourg",
+      "Sweden",
+      "Europe",
     ]),
-  ).sort();
+  ).sort((a, b) => (a === "France" ? -1 : b === "France" ? 1 : a.localeCompare(b)));
 
   const panelContentId = `${uid}-panel-fields`;
   const countryDatalistId = `${uid}-country-options`;
@@ -212,7 +217,7 @@ export function FilterPanel({
               value={filters.country}
               onChange={(e) => update("country", e.target.value)}
               className="input-field min-h-[44px] sm:min-h-[42px]"
-              placeholder="France, Germany, Remote..."
+              placeholder="France, Paris, Germany, UK..."
             />
             <datalist id={countryDatalistId}>
               {countrySuggestions.map((c) => (
@@ -253,7 +258,7 @@ export function FilterPanel({
               value={filters.city}
               onChange={(e) => update("city", e.target.value)}
               className="input-field min-h-[44px] sm:min-h-[42px]"
-              placeholder="Paris, Lyon, Remote..."
+              placeholder="Paris, Lyon, Toulouse, Remote..."
             />
           </div>
 

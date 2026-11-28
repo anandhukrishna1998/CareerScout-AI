@@ -11,6 +11,7 @@ import asyncpg
 import httpx
 import redis.asyncio as aioredis
 
+from app.geo import is_europe_job, parse_europe_country_city, sanitize_http_url
 from app.scrape_orchestrator import scrape_all_sources
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -52,16 +53,7 @@ def _infer_remote_mode(location: str, title: str, description: str) -> str:
 
 
 def _parse_country_city(location: str) -> tuple[str, str]:
-    clean = (location or "").strip()
-    if not clean:
-        return "Worldwide", "Remote"
-    lower = clean.lower()
-    if any(tok in lower for tok in ("worldwide", "anywhere", "remote", "global")):
-        return "Worldwide", "Remote"
-    parts = [p.strip() for p in clean.split(",") if p.strip()]
-    if len(parts) >= 2:
-        return parts[-1], parts[0]
-    return clean, clean
+    return parse_europe_country_city(location)
 
 
 def _extract_skills_simple(text: str) -> list[str]:
@@ -163,10 +155,30 @@ async def persist_scrape_results(database_url: str, sources: list[str] | None = 
             ON jobs(source, external_id)
             """
         )
+        europe_only = os.getenv("EUROPE_ONLY_JOBS", "true").strip().lower() not in {"0", "false", "no"}
         scrape_results = await scrape_all_sources(sources=sources)
         for source, jobs in scrape_results.items():
-            logger.info("source=%s scraped_jobs=%s", source, len(jobs))
-            for job in jobs:
+            filtered_jobs = (
+                [
+                    job
+                    for job in jobs
+                    if is_europe_job(
+                        job.location,
+                        title=job.title,
+                        description=job.description,
+                        source=job.source,
+                    )
+                ]
+                if europe_only
+                else jobs
+            )
+            logger.info(
+                "source=%s scraped_jobs=%s accepted_eu_jobs=%s",
+                source,
+                len(jobs),
+                len(filtered_jobs),
+            )
+            for job in filtered_jobs:
                 country, city = _parse_country_city(job.location)
                 remote_mode = _infer_remote_mode(job.location, job.title, job.description)
                 skills = _extract_skills_simple(f"{job.title}\n{job.description}")
@@ -202,7 +214,7 @@ async def persist_scrape_results(database_url: str, sources: list[str] | None = 
                     remote_mode[:32],
                     json.dumps(skills),
                     job.description,
-                    job.apply_url[:1024],
+                    sanitize_http_url(job.apply_url)[:1024],
                     posted_dt,
                 )
                 total += 1
@@ -418,6 +430,9 @@ async def run_queue_loop() -> None:
                     continue
                 _, raw_payload = item
                 task = json.loads(raw_payload)
+                if not isinstance(task, dict):
+                    logger.warning("ignoring non-dict worker payload")
+                    continue
                 count = await process_task(task, database_url, ai_engine_url)
                 logger.info("processed task=%s count=%s", task.get("type"), count)
             except asyncio.CancelledError:

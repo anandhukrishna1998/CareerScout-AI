@@ -353,6 +353,131 @@ class CareerScoutApiTests(unittest.TestCase):
         extracted = extract_cv_text(raw_octal_pdf, "application/pdf", "glyph.pdf")
         self.assertEqual(extracted, "")
 
+    def test_chat_missing_job_returns_404_and_sqlite_and_ip_helpers(self) -> None:
+        from starlette.requests import Request
+        from app.db import _is_sqlite_url, _normalize_sqlite_url
+        from app.services.rate_limit import _extract_client_ip
+
+        self.assertTrue(_is_sqlite_url("sqlite+aiosqlite:///./test.db"))
+        self.assertEqual(_normalize_sqlite_url("sqlite+aiosqlite:///./test.db"), "sqlite:///./test.db")
+
+        req = Request(
+            {
+                "type": "http",
+                "headers": [(b"x-forwarded-for", b"203.0.113.10, 10.0.0.2")],
+                "client": ("10.0.0.2", 12345),
+            }
+        )
+        self.assertEqual(_extract_client_ip(req), "203.0.113.10")
+
+        user_pair = self._register("chat404@example.com")
+        headers = {"Authorization": f"Bearer {user_pair['access_token']}"}
+        res = self.client.post("/ai/chat", headers=headers, json={"message": "Hi", "job_id": 9999999})
+        self.assertEqual(res.status_code, 404)
+
+    def test_europe_geo_filtering_slug_sanitization_and_france_priority(self) -> None:
+        from app.services.geo import (
+            is_europe_job,
+            parse_europe_country_city,
+            sanitize_company_slug,
+        )
+
+        self.assertEqual(parse_europe_country_city("Paris, Île-de-France, France"), ("France", "Paris"))
+        self.assertEqual(parse_europe_country_city("Sophia Antipolis"), ("France", "Sophia Antipolis"))
+        self.assertEqual(parse_europe_country_city("Remote, FR"), ("France", "Remote"))
+        self.assertEqual(parse_europe_country_city("Berlin, Germany"), ("Germany", "Berlin"))
+        self.assertEqual(parse_europe_country_city("Paris, TX"), ("United States", "Paris"))
+
+        self.assertTrue(is_europe_job("Paris, France"))
+        self.assertTrue(is_europe_job("Remote - Europe"))
+        self.assertFalse(is_europe_job("US Only"))
+        self.assertFalse(is_europe_job("San Francisco, CA"))
+        self.assertFalse(is_europe_job("Paris, TX"))
+        self.assertFalse(is_europe_job("Worldwide"))
+
+        self.assertEqual(sanitize_company_slug("Pennylane"), "pennylane")
+        self.assertIsNone(sanitize_company_slug("../../etc/passwd"))
+        self.assertIsNone(sanitize_company_slug("foo?bar=1"))
+
+        eu_jobs = self.client.get("/jobs?country=Europe")
+        self.assertEqual(eu_jobs.status_code, 200)
+        self.assertEqual(eu_jobs.json()["available_countries"][0], "France")
+
+    def test_security_hardening_uploads_tokens_headers_and_urls(self) -> None:
+        from pydantic import ValidationError
+        from app.services.geo import sanitize_http_url
+        from app.settings import Settings
+
+        self.assertEqual(sanitize_http_url("javascript:alert(1)"), "")
+        self.assertEqual(sanitize_http_url("data:text/html,<svg/onload=alert(1)>"), "")
+        self.assertEqual(sanitize_http_url("https://jobs.example.com/1"), "https://jobs.example.com/1")
+
+        # Production secret validator fails closed on default/weak JWT_SECRET or missing CV key
+        with self.assertRaises(ValidationError):
+            Settings(app_env="production", jwt_secret="change-me-super-long-secret")
+        with self.assertRaises(ValidationError):
+            Settings(app_env="staging", jwt_secret="short", cv_encryption_key="abc")
+        prod_settings = Settings(
+            app_env="staging",
+            jwt_secret="super-strong-production-jwt-secret-key-2026",
+            cv_encryption_key="dedicated-cv-key-2026",
+            enable_demo_mode=True,
+        )
+        self.assertFalse(prod_settings.demo_enabled)
+
+        # Password change revokes prior tokens and issues a fresh valid session
+        reg = self._register("sec-hardening@example.com")
+        old_access = reg["access_token"]
+        old_refresh = reg["refresh_token"]
+        old_headers = {"Authorization": f"Bearer {old_access}"}
+
+        cp = self.client.post(
+            "/auth/change-password",
+            headers=old_headers,
+            json={"current_password": "strongpass123", "new_password": "newstrongpassword456"},
+        )
+        self.assertEqual(cp.status_code, 200, cp.text)
+        new_headers = {"Authorization": f"Bearer {cp.json()['access_token']}"}
+        self.assertEqual(self.client.get("/auth/me", headers=old_headers).status_code, 401)
+        self.assertEqual(self.client.post("/auth/refresh", json={"refresh_token": old_refresh}).status_code, 401)
+        self.assertEqual(self.client.get("/auth/me", headers=new_headers).status_code, 200)
+
+        # Reject MIME spoof and sanitize Content-Disposition filename
+        spoof = self.client.post(
+            "/cvs/upload",
+            headers=new_headers,
+            files={"file": ("cv.txt", b"Python Senior Engineer 5 years", "text/html")},
+        )
+        self.assertEqual(spoof.status_code, 400)
+
+        up1 = self.client.post(
+            "/cvs/from-text",
+            headers=new_headers,
+            json={
+                "filename": "../../evil\"\r\nname.txt",
+                "text": "Senior Python Engineer with 5 years experience in Paris France.",
+                "set_primary": True,
+            },
+        )
+        up2 = self.client.post(
+            "/cvs/from-text",
+            headers=new_headers,
+            json={
+                "filename": "copy.txt",
+                "text": "Senior Python Engineer with 5 years experience in Paris France.",
+                "set_primary": False,
+            },
+        )
+        self.assertEqual(up1.status_code, 200)
+        self.assertEqual(up2.status_code, 200)
+        # Deleting duplicate copy 1 must NOT break copy 2 download
+        self.assertEqual(self.client.delete(f"/cvs/{up1.json()['id']}", headers=new_headers).status_code, 200)
+        dl2 = self.client.get(f"/cvs/{up2.json()['id']}/download", headers=new_headers)
+        self.assertEqual(dl2.status_code, 200)
+        self.assertEqual(dl2.headers.get("x-content-type-options"), "nosniff")
+        self.assertNotIn("\r", dl2.headers.get("content-disposition", ""))
+        self.assertNotIn("\n", dl2.headers.get("content-disposition", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

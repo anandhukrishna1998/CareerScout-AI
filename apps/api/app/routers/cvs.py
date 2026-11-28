@@ -1,4 +1,6 @@
+import re
 from hashlib import sha256
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy import desc, select
@@ -10,15 +12,23 @@ from app.schemas import CVFromTextRequest, CVParsedPatchRequest
 from app.services.ai_client import parse_cv_text
 from app.services.cv_extractor import (
     ALLOWED_CV_MIME_TYPES,
+    CANONICAL_MIME_BY_EXT,
     extract_cv_text,
     validate_cv_magic_bytes,
 )
 from app.services.matching import recompute_matches_for_user
 from app.services.quotas import enforce_cv_quota
-from app.services.storage import delete_blob, encrypt_and_save, read_and_decrypt
+from app.services.rate_limit import rate_limit_dependency
+from app.services.storage import InvalidToken, delete_blob, encrypt_and_save, read_and_decrypt
 from app.settings import settings
 
 router = APIRouter()
+
+
+def _sanitize_filename(raw: str) -> str:
+    leaf = Path(raw or "resume.txt").name
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", leaf).strip("._")
+    return (cleaned or "resume.txt")[:180]
 
 
 def _serialize_cv(cv: CV, parsed: CVParsed | None) -> dict[str, object]:
@@ -57,6 +67,7 @@ async def _create_cv_record(
     set_primary: bool,
     db: AsyncSession,
 ) -> dict[str, object]:
+    safe_filename = _sanitize_filename(filename)
     checksum = sha256(content).hexdigest()
     storage_path = encrypt_and_save(user.id, checksum, content)
 
@@ -67,7 +78,7 @@ async def _create_cv_record(
 
     cv = CV(
         user_id=user.id,
-        filename=filename[:255],
+        filename=safe_filename,
         storage_path=storage_path,
         mime_type=mime_type,
         file_size=len(content),
@@ -79,12 +90,14 @@ async def _create_cv_record(
     await db.flush()
 
     parsed_data = await parse_cv_text(text=extracted_text)
+    raw_years = parsed_data.get("years_experience", 0)
+    years_exp = int(raw_years) if isinstance(raw_years, (int, float)) else 0
     cv_parsed = CVParsed(
         cv_id=cv.id,
         summary=str(parsed_data.get("summary", "")),
         skills=list(parsed_data.get("skills", [])),
         languages=list(parsed_data.get("languages", [])),
-        years_experience=int(parsed_data.get("years_experience", 0)),
+        years_experience=max(0, min(years_exp, 60)),
         experience_level=str(parsed_data.get("experience_level", "mid")),
         suggested_roles=list(parsed_data.get("suggested_roles", [])),
     )
@@ -118,7 +131,10 @@ async def list_cvs(
     return {"items": [_serialize_cv(c, parsed_by_cv.get(c.id)) for c in cvs]}
 
 
-@router.post("/upload")
+@router.post(
+    "/upload",
+    dependencies=[Depends(rate_limit_dependency("cvs-upload", limit=25, window_seconds=60))],
+)
 async def upload_cv(
     file: UploadFile = File(...),
     set_primary: bool = Form(default=True),
@@ -126,33 +142,36 @@ async def upload_cv(
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     await enforce_cv_quota(current_user, db)
-    filename = (file.filename or "resume.txt").strip()
-    content_type = (file.content_type or "application/octet-stream").lower()
+    filename = _sanitize_filename(file.filename or "resume.txt")
+    content_type = (file.content_type or "application/octet-stream").split(";", 1)[0].strip().lower()
+    ext = Path(filename).suffix.lower()
 
-    allowed_exts = (".pdf", ".docx", ".txt", ".md")
-    if content_type not in ALLOWED_CV_MIME_TYPES and not filename.lower().endswith(allowed_exts):
+    if ext not in CANONICAL_MIME_BY_EXT:
         raise HTTPException(status_code=400, detail="Unsupported file type")
+    if content_type not in ALLOWED_CV_MIME_TYPES and content_type != "application/octet-stream":
+        raise HTTPException(status_code=400, detail="Unsupported MIME content type")
 
-    content = await file.read()
+    canonical_mime = CANONICAL_MIME_BY_EXT[ext]
+    max_bytes = settings.upload_max_mb * 1024 * 1024
+    content = await file.read(max_bytes + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
-    max_bytes = settings.upload_max_mb * 1024 * 1024
     if len(content) > max_bytes:
         raise HTTPException(status_code=400, detail=f"File exceeds {settings.upload_max_mb} MB limit")
 
     try:
-        validate_cv_magic_bytes(content, content_type, filename)
+        validate_cv_magic_bytes(content, canonical_mime, filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    extracted_text = extract_cv_text(content, content_type, filename)
+    extracted_text = extract_cv_text(content, canonical_mime, filename)
     if not extracted_text:
         raise HTTPException(status_code=400, detail="Could not extract readable text from CV")
 
     return await _create_cv_record(
         user=current_user,
         filename=filename,
-        mime_type=content_type,
+        mime_type=canonical_mime,
         content=content,
         extracted_text=extracted_text,
         set_primary=set_primary,
@@ -160,7 +179,10 @@ async def upload_cv(
     )
 
 
-@router.post("/from-text")
+@router.post(
+    "/from-text",
+    dependencies=[Depends(rate_limit_dependency("cvs-upload", limit=25, window_seconds=60))],
+)
 async def create_cv_from_text(
     payload: CVFromTextRequest,
     current_user: User = Depends(get_current_user),
@@ -209,11 +231,20 @@ async def download_cv(
         raw = read_and_decrypt(cv.storage_path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV file missing") from exc
-    safe_name = cv.filename.replace('"', "")
+    except InvalidToken as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unable to decrypt stored CV",
+        ) from exc
+    safe_name = _sanitize_filename(cv.filename)
     return Response(
         content=raw,
         media_type=cv.mime_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
     )
 
 

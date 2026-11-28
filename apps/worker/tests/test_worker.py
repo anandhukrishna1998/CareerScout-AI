@@ -170,6 +170,31 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual((dt.year, dt.month, dt.day), (2026, 11, 25))
         self.assertIsNotNone(dt.tzinfo)
 
+    def test_geo_filters_non_europe_and_validates_slugs(self) -> None:
+        from app.geo import is_europe_job, parse_europe_country_city, sanitize_company_slug
+
+        self.assertTrue(is_europe_job("Lyon, France"))
+        self.assertTrue(is_europe_job("London, UK"))
+        self.assertFalse(is_europe_job("San Francisco, CA"))
+        self.assertFalse(is_europe_job("Newark, NJ"))
+        self.assertFalse(is_europe_job("Worldwide"))
+        self.assertEqual(parse_europe_country_city("Télétravail - France"), ("France", "Remote"))
+        self.assertEqual(sanitize_company_slug("alan"), "alan")
+        self.assertIsNone(sanitize_company_slug("../bad/slug"))
+
+    def test_ssrf_and_apply_url_sanitization(self) -> None:
+        from app.geo import is_safe_outbound_https_url, sanitize_http_url
+
+        self.assertTrue(is_safe_outbound_https_url("https://boards-api.greenhouse.io/v1/boards/algolia/jobs"))
+        self.assertFalse(is_safe_outbound_https_url("http://boards-api.greenhouse.io/jobs"))
+        self.assertFalse(is_safe_outbound_https_url("https://127.0.0.1/admin"))
+        self.assertFalse(is_safe_outbound_https_url("https://169.254.169.254/latest/meta-data/"))
+        self.assertFalse(is_safe_outbound_https_url("https://localhost/secret"))
+
+        self.assertEqual(sanitize_http_url("javascript:alert(1)"), "")
+        self.assertEqual(sanitize_http_url("data:text/html,hi"), "")
+        self.assertEqual(sanitize_http_url("https://jobs.alan.com/role"), "https://jobs.alan.com/role")
+
 
 if __name__ == "__main__":
     unittest.main()

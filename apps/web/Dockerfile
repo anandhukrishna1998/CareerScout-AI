@@ -18,13 +18,14 @@ RUN pnpm --filter @careerscout/web build
 FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-RUN corepack enable
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=build /app/apps/web/.next apps/web/.next
-COPY --from=build /app/apps/web/public apps/web/public
-COPY --from=build /app/apps/web/package.json apps/web/package.json
-COPY --from=build /app/node_modules /app/node_modules
-COPY --from=build /app/apps/web/node_modules /app/apps/web/node_modules
+RUN corepack enable && addgroup -S nodejs && adduser -S nextjs -G nodejs
+COPY --from=build --chown=nextjs:nodejs /app/package.json ./package.json
+COPY --from=build --chown=nextjs:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/.next apps/web/.next
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/public apps/web/public
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/package.json apps/web/package.json
+COPY --from=build --chown=nextjs:nodejs /app/node_modules /app/node_modules
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/node_modules /app/apps/web/node_modules
+USER nextjs
 EXPOSE 3000
 CMD ["pnpm", "--filter", "@careerscout/web", "start"]

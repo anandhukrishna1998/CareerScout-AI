@@ -6,18 +6,23 @@ from urllib.parse import urlparse
 import httpx
 
 from app.adapters.base import JobProviderAdapter, NormalizedJob
+from app.geo import is_safe_outbound_https_url, sanitize_http_url
 
 
 class CompanyCareerPagesAdapter(JobProviderAdapter):
     async def search_recent_jobs(self) -> list[NormalizedJob]:
-        urls = [x.strip() for x in os.getenv("COMPANY_CAREER_PAGE_URLS", "").split(",") if x.strip()]
+        urls = [
+            x.strip()
+            for x in os.getenv("COMPANY_CAREER_PAGE_URLS", "").split(",")
+            if is_safe_outbound_https_url(x)
+        ]
         if not urls:
             return []
 
         jobs: list[NormalizedJob] = []
         link_regex = re.compile(r'href=["\']([^"\']+)["\']', flags=re.IGNORECASE)
 
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             for page_url in urls:
                 try:
                     response = await client.get(page_url)
@@ -29,20 +34,21 @@ class CompanyCareerPagesAdapter(JobProviderAdapter):
                     lower = match.lower()
                     if "job" not in lower and "career" not in lower and "position" not in lower:
                         continue
-                    if not match.startswith("http"):
+                    safe_link = sanitize_http_url(match)
+                    if not safe_link:
                         continue
-                    parsed = urlparse(match)
+                    parsed = urlparse(safe_link)
                     title = parsed.path.strip("/").split("/")[-1].replace("-", " ").strip() or "Career Opportunity"
                     jobs.append(
                         NormalizedJob(
                             source="company_career_pages",
-                            external_id=match,
+                            external_id=safe_link,
                             title=title.title(),
                             company=urlparse(page_url).netloc,
-                            location="Unknown",
+                            location="Europe",
                             posted_at=datetime.now(tz=timezone.utc).isoformat(),
                             description=f"Discovered from {page_url}",
-                            apply_url=match,
+                            apply_url=safe_link,
                         )
                     )
         return jobs

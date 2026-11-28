@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_current_user, get_db_session, get_optional_user
 from app.models import Job, JobMatch, SavedJob, User
 from app.schemas import JobIngestRequest
-from app.services.ingestion import ingest_sources, upsert_jobs
+from app.services.geo import sanitize_http_url
+from app.services.ingestion import ingest_sources
 from app.services.matching import recompute_matches_for_user
+from app.services.rate_limit import rate_limit_dependency
 
 router = APIRouter()
 
@@ -32,7 +34,7 @@ def _serialize_job_item(
         "salary_text": job.salary_text,
         "skills": list(job.skills or []),
         "source": job.source,
-        "apply_url": job.apply_url,
+        "apply_url": sanitize_http_url(job.apply_url),
         "posted_at": job.posted_at.isoformat(),
         "score": match.score if match is not None else None,
         "matched_skills": list(match.matched_skills or []) if match is not None else [],
@@ -49,6 +51,7 @@ async def list_jobs(
     city: str | None = None,
     technologies: str | None = Query(default=None),
     remote_mode: str | None = None,
+    experience_level: str | None = None,
     source: str | None = None,
     posting_age_hours: int = Query(default=0, ge=0, le=8760),
     min_score: int = Query(default=0, ge=0, le=100),
@@ -65,7 +68,10 @@ async def list_jobs(
     all_jobs = (await db.scalars(stmt.order_by(Job.posted_at.desc()))).all()
 
     available_sources = sorted({j.source for j in all_jobs if j.source})
-    available_countries = sorted({j.country for j in all_jobs if j.country})
+    available_countries = sorted(
+        {j.country for j in all_jobs if j.country},
+        key=lambda c: (0 if c == "France" else (1 if c == "Europe" else 2), c),
+    )
 
     matches_by_job: dict[int, JobMatch] = {}
     saved_by_job: dict[int, SavedJob] = {}
@@ -84,6 +90,7 @@ async def list_jobs(
     city_lower = (city or "").strip().lower()
     tech_terms = [t.strip().lower() for t in (technologies or "").split(",") if t.strip()]
     remote_lower = (remote_mode or "").strip().lower()
+    exp_lower = (experience_level or "").strip().lower()
     source_lower = (source or "").strip().lower()
 
     filtered: list[Job] = []
@@ -92,11 +99,17 @@ async def list_jobs(
             haystack = f"{job.title} {job.company} {job.description} {' '.join(job.skills or [])}".lower()
             if q_lower not in haystack:
                 continue
-        if country_lower and country_lower not in f"{job.country} {job.location}".lower():
+        if (
+            country_lower
+            and country_lower not in {"europe", "all europe", "all"}
+            and country_lower not in f"{job.country} {job.location}".lower()
+        ):
             continue
         if city_lower and city_lower not in f"{job.city} {job.location}".lower():
             continue
         if remote_lower and remote_lower != "all" and job.remote_mode.lower() != remote_lower:
+            continue
+        if exp_lower and exp_lower != "all" and job.experience_level.lower() != exp_lower:
             continue
         if source_lower and source_lower != "all" and job.source.lower() != source_lower:
             continue
@@ -114,6 +127,7 @@ async def list_jobs(
         filtered.sort(
             key=lambda j: (
                 matches_by_job[j.id].score if j.id in matches_by_job else -1,
+                1 if j.country == "France" else 0,
                 j.posted_at.timestamp(),
             ),
             reverse=True,
@@ -121,7 +135,10 @@ async def list_jobs(
     elif sort == "company":
         filtered.sort(key=lambda j: (j.company.lower(), j.title.lower()))
     else:
-        filtered.sort(key=lambda j: j.posted_at.timestamp(), reverse=True)
+        filtered.sort(
+            key=lambda j: (1 if j.country == "France" else 0, j.posted_at.timestamp()),
+            reverse=True,
+        )
 
     total = len(filtered)
     total_pages = max(1, ceil(total / page_size)) if total > 0 else 1
@@ -196,7 +213,10 @@ async def get_job(
     return payload
 
 
-@router.post("/ingest")
+@router.post(
+    "/ingest",
+    dependencies=[Depends(rate_limit_dependency("jobs-ingest", limit=10, window_seconds=60))],
+)
 async def ingest_jobs(
     payload: JobIngestRequest,
     current_user: User = Depends(get_current_user),
@@ -213,7 +233,10 @@ async def ingest_jobs(
     return {"total_ingested": total, "query_used": payload.query}
 
 
-@router.post("/ingest/remoteok")
+@router.post(
+    "/ingest/remoteok",
+    dependencies=[Depends(rate_limit_dependency("jobs-ingest", limit=10, window_seconds=60))],
+)
 async def ingest_remoteok(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),

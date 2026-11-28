@@ -1,7 +1,7 @@
 import json
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     enable_demo_mode: bool = True
+    europe_only_jobs: bool = True
     api_cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:3000",
         "http://localhost",
@@ -33,12 +34,27 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
 
-    scrape_sources: str = "remoteok,weworkremotely,greenhouse,lever,france_travail"
+    scrape_sources: str = "jobicy,ashby,greenhouse,lever,arbeitnow,france_travail,apec,indeed"
     serpapi_key: str = ""
-    greenhouse_companies: str = ""
-    lever_companies: str = ""
+    greenhouse_companies: str = "algolia,mirakl,datacamp"
+    lever_companies: str = "swile"
+    ashby_companies: str = "alan,pennylane,dust,nabla,photoroom,deepl"
     france_travail_access_token: str = ""
     apec_api_url: str = ""
+
+    @model_validator(mode="after")
+    def _enforce_production_secrets(self) -> "Settings":
+        if self.app_env.lower() not in {"development", "local", "test"}:
+            if (
+                self.jwt_secret == "change-me-super-long-secret"
+                or len(self.jwt_secret.strip()) < 32
+            ):
+                raise ValueError(
+                    "JWT_SECRET must be a strong non-default secret (>=32 chars) outside development"
+                )
+            if not self.cv_encryption_key.strip():
+                raise ValueError("CV_ENCRYPTION_KEY must be explicitly set outside development")
+        return self
 
     @field_validator("api_cors_origins", mode="before")
     @classmethod
@@ -61,7 +77,7 @@ class Settings(BaseSettings):
 
     @property
     def demo_enabled(self) -> bool:
-        return self.enable_demo_mode and self.app_env.lower() != "production"
+        return self.enable_demo_mode and self.app_env.lower() in {"development", "local", "test"}
 
 
 settings = Settings()
